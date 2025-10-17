@@ -17,10 +17,13 @@ namespace InterfaceExtractor.Commands
 
         private readonly AsyncPackage package;
         private readonly Services.InterfaceExtractorService extractorService;
+        private readonly DTE2 dte;
+        private IVsOutputWindowPane outputPane;
 
-        private ExtractInterfaceCommand(AsyncPackage package, IMenuCommandService commandService)
+        private ExtractInterfaceCommand(AsyncPackage package, OleMenuCommandService commandService, DTE2 dte)
         {
             this.package = package ?? throw new ArgumentNullException(nameof(package));
+            this.dte = dte ?? throw new ArgumentNullException(nameof(dte));
             commandService = commandService ?? throw new ArgumentNullException(nameof(commandService));
 
             extractorService = new Services.InterfaceExtractorService();
@@ -37,8 +40,33 @@ namespace InterfaceExtractor.Commands
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
 
+            // Get services asynchronously
             var commandService = await package.GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
-            Instance = new ExtractInterfaceCommand(package, commandService);
+            var dte = await package.GetServiceAsync(typeof(DTE)) as DTE2;
+
+            Instance = new ExtractInterfaceCommand(package, commandService, dte);
+
+            // Initialize output pane
+            await Instance.InitializeOutputPaneAsync();
+        }
+
+        private async Task InitializeOutputPaneAsync()
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            if (await package.GetServiceAsync(typeof(SVsOutputWindow)) is IVsOutputWindow outWindow)
+            {
+                var customGuid = new Guid("B8A0C8E1-2F3E-4D5A-9C8B-7E6F5A4D3C2B");
+                outWindow.CreatePane(ref customGuid, Constants.OutputPaneName, 1, 1);
+                outWindow.GetPane(ref customGuid, out outputPane);
+            }
+        }
+
+        private void LogMessage(string message)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            outputPane?.OutputStringThreadSafe($"[{DateTime.Now:HH:mm:ss}] {message}\n");
+            outputPane?.Activate();
         }
 
         private void OnBeforeQueryStatus(object sender, EventArgs e)
@@ -50,7 +78,6 @@ namespace InterfaceExtractor.Commands
             command.Visible = false;
             command.Enabled = false;
 
-            var dte = Package.GetGlobalService(typeof(DTE)) as DTE2;
             if (dte?.SelectedItems == null) return;
 
             foreach (SelectedItem item in dte.SelectedItems)
@@ -58,7 +85,7 @@ namespace InterfaceExtractor.Commands
                 if (item.ProjectItem?.FileNames[1] != null)
                 {
                     var fileName = item.ProjectItem.FileNames[1];
-                    if (Path.GetExtension(fileName).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+                    if (Path.GetExtension(fileName).Equals(Constants.CSharpExtension, StringComparison.OrdinalIgnoreCase))
                     {
                         command.Visible = true;
                         command.Enabled = true;
@@ -70,74 +97,85 @@ namespace InterfaceExtractor.Commands
 
         private void Execute(object sender, EventArgs e)
         {
-            try
+            // Use JoinableTaskFactory.RunAsync for proper async execution from sync context
+            ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
-                ThreadHelper.JoinableTaskFactory.Run(async () => await ExecuteAsync());
-            }
-            catch (Exception ex)
-            {
-                ThreadHelper.JoinableTaskFactory.Run(async () =>
+                try
+                {
+                    await ExecuteAsync();
+                }
+                catch (Exception ex)
                 {
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    ShowMessage($"Error: {ex.Message}\n\nStack: {ex.StackTrace}");
-                });
-            }
+                    LogMessage($"Critical error: {ex.Message}");
+                    LogMessage($"Stack trace: {ex.StackTrace}");
+                    ShowMessage($"Error: {ex.Message}\n\nCheck the Output Window for details.");
+                }
+            }).FileAndForget("InterfaceExtractor/Execute");
         }
 
         private async Task ExecuteAsync()
         {
-            try
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            LogMessage("Starting interface extraction...");
+
+            if (dte?.SelectedItems == null)
             {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                ShowMessage("No files selected.");
+                return;
+            }
 
-                var dte = Package.GetGlobalService(typeof(DTE)) as DTE2;
-                if (dte?.SelectedItems == null)
+            var selectedFiles = dte.SelectedItems.Cast<SelectedItem>()
+                .Where(item =>
                 {
-                    ShowMessage("No files selected.");
-                    return;
-                }
-
-                var selectedFiles = dte.SelectedItems.Cast<SelectedItem>()
-                    .Where(item =>
-                    {
-                        ThreadHelper.ThrowIfNotOnUIThread();
-                        return item.ProjectItem?.FileNames[1] != null;
-                    })
-                    .Select(item =>
-                    {
-                        ThreadHelper.ThrowIfNotOnUIThread();
-                        return item.ProjectItem.FileNames[1];
-                    })
-                    .Where(path => Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                if (!selectedFiles.Any())
+                    ThreadHelper.ThrowIfNotOnUIThread();
+                    return item.ProjectItem?.FileNames[1] != null;
+                })
+                .Select(item =>
                 {
-                    ShowMessage("No C# files selected.");
-                    return;
-                }
+                    ThreadHelper.ThrowIfNotOnUIThread();
+                    return item.ProjectItem.FileNames[1];
+                })
+                .Where(path => Path.GetExtension(path).Equals(Constants.CSharpExtension, StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
-                int successCount = 0;
-                int failCount = 0;
+            if (!selectedFiles.Any())
+            {
+                ShowMessage("No C# files selected.");
+                return;
+            }
 
-                foreach (var filePath in selectedFiles)
+            LogMessage($"Processing {selectedFiles.Count} file(s)...");
+
+            int successCount = 0;
+            int failCount = 0;
+            int skippedCount = 0;
+
+            foreach (var filePath in selectedFiles)
+            {
+                LogMessage($"Analyzing: {Path.GetFileName(filePath)}");
+
+                try
                 {
-                    try
-                    {
-                        // Analyze the class
-                        var classInfo = await extractorService.AnalyzeClassAsync(filePath);
+                    // Analyze the class(es)
+                    var classInfos = await extractorService.AnalyzeClassesAsync(filePath);
 
-                        if (classInfo == null)
-                        {
-                            ShowMessage($"No public class found in {Path.GetFileName(filePath)}");
-                            failCount++;
-                            continue;
-                        }
+                    if (!classInfos.Any())
+                    {
+                        LogMessage($"  No public classes with members found in {Path.GetFileName(filePath)}");
+                        skippedCount++;
+                        continue;
+                    }
+
+                    // If multiple classes, let user choose or process all
+                    foreach (var classInfo in classInfos)
+                    {
+                        LogMessage($"  Found class: {classInfo.ClassName} with {classInfo.Members.Count} public member(s)");
 
                         if (!classInfo.Members.Any())
                         {
-                            ShowMessage($"No public members found in class {classInfo.ClassName}");
-                            failCount++;
+                            LogMessage($"  No public members found in class {classInfo.ClassName}");
                             continue;
                         }
 
@@ -157,7 +195,16 @@ namespace InterfaceExtractor.Commands
 
                         if (result != true)
                         {
-                            // User cancelled
+                            LogMessage($"  User cancelled extraction for {classInfo.ClassName}");
+                            skippedCount++;
+                            continue;
+                        }
+
+                        // Validate interface name
+                        if (!IsValidInterfaceName(dialog.InterfaceName, out string validationError))
+                        {
+                            ShowMessage($"Invalid interface name: {validationError}");
+                            failCount++;
                             continue;
                         }
 
@@ -169,8 +216,11 @@ namespace InterfaceExtractor.Commands
                         if (!selectedMembers.Any())
                         {
                             ShowMessage("No members selected.");
+                            skippedCount++;
                             continue;
                         }
+
+                        LogMessage($"  Generating interface {dialog.InterfaceName} with {selectedMembers.Count} member(s)");
 
                         // Generate interface code
                         var interfaceCode = Services.InterfaceExtractorService.GenerateInterface(
@@ -179,11 +229,28 @@ namespace InterfaceExtractor.Commands
                             selectedMembers);
 
                         // Save interface file
-                        var interfacesFolder = Path.Combine(Path.GetDirectoryName(filePath), "Interfaces");
+                        var interfacesFolder = Path.Combine(Path.GetDirectoryName(filePath), Constants.InterfacesFolderName);
                         Directory.CreateDirectory(interfacesFolder);
 
-                        var interfaceFilePath = Path.Combine(interfacesFolder, $"{dialog.InterfaceName}.cs");
+                        var interfaceFilePath = Path.Combine(interfacesFolder, $"{dialog.InterfaceName}{Constants.CSharpExtension}");
+
+                        // Check if file exists
+                        if (File.Exists(interfaceFilePath))
+                        {
+                            var overwriteResult = ShowConfirmation(
+                                $"File {dialog.InterfaceName}{Constants.CSharpExtension} already exists. Overwrite?",
+                                "File Exists");
+
+                            if (overwriteResult != true)
+                            {
+                                LogMessage($"  User chose not to overwrite existing file");
+                                skippedCount++;
+                                continue;
+                            }
+                        }
+
                         File.WriteAllText(interfaceFilePath, interfaceCode);
+                        LogMessage($"  Created: {interfaceFilePath}");
 
                         // Add to project
                         var projectItem = dte.Solution.FindProjectItem(filePath);
@@ -196,34 +263,90 @@ namespace InterfaceExtractor.Commands
                                     .FirstOrDefault(pi =>
                                     {
                                         ThreadHelper.ThrowIfNotOnUIThread();
-                                        return pi.Name == "Interfaces";
-                                    }) ?? projectItems.AddFolder("Interfaces");
-                                interfacesFolderItem?.ProjectItems.AddFromFile(interfaceFilePath);
+                                        return pi.Name == Constants.InterfacesFolderName;
+                                    }) ?? projectItems.AddFolder(Constants.InterfacesFolderName);
+
+                                // Check if already in project
+                                var existingItem = interfacesFolderItem?.ProjectItems.Cast<ProjectItem>()
+                                    .FirstOrDefault(pi =>
+                                    {
+                                        ThreadHelper.ThrowIfNotOnUIThread();
+                                        return pi.Name == $"{dialog.InterfaceName}{Constants.CSharpExtension}";
+                                    });
+
+                                if (existingItem == null)
+                                {
+                                    interfacesFolderItem?.ProjectItems.AddFromFile(interfaceFilePath);
+                                    LogMessage($"  Added to project");
+                                }
+                                else
+                                {
+                                    LogMessage($"  File already in project");
+                                }
                             }
-                            catch
+                            catch (Exception ex)
                             {
-                                // File created but couldn't add to project - that's ok
+                                LogMessage($"  Warning: Could not add file to project: {ex.Message}");
+                                // File created successfully, just couldn't add to project
                             }
                         }
 
                         successCount++;
                     }
-                    catch (InvalidOperationException ex)
-                    {
-                        failCount++;
-                        ShowMessage($"Error processing {Path.GetFileName(filePath)}: {ex.Message}");
-                    }
                 }
-
-                if (successCount > 0 || failCount > 0)
+                catch (InvalidOperationException ex)
                 {
-                    ShowMessage($"Interface extraction complete!\n\nSucceeded: {successCount}\nFailed: {failCount}");
+                    failCount++;
+                    LogMessage($"  Error processing {Path.GetFileName(filePath)}: {ex.Message}");
+                    ShowMessage($"Error processing {Path.GetFileName(filePath)}: {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    failCount++;
+                    LogMessage($"  Unexpected error processing {Path.GetFileName(filePath)}: {ex.Message}");
+                    LogMessage($"  Stack trace: {ex.StackTrace}");
+                    ShowMessage($"Unexpected error processing {Path.GetFileName(filePath)}: {ex.Message}");
                 }
             }
-            catch (Exception ex)
+
+            var summary = $"Interface extraction complete!\n\n" +
+                         $"Succeeded: {successCount}\n" +
+                         $"Failed: {failCount}\n" +
+                         $"Skipped: {skippedCount}";
+
+            LogMessage(summary.Replace("\n", " "));
+
+            if (successCount > 0 || failCount > 0)
             {
-                ShowMessage($"Error: {ex.Message}");
+                ShowMessage(summary);
             }
+        }
+
+        private static bool IsValidInterfaceName(string name, out string error)
+        {
+            error = null;
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                error = "Interface name cannot be empty.";
+                return false;
+            }
+
+            // Check if valid C# identifier
+            if (!Microsoft.CodeAnalysis.CSharp.SyntaxFacts.IsValidIdentifier(name))
+            {
+                error = "Interface name is not a valid C# identifier.";
+                return false;
+            }
+
+            // Check if it's a reserved keyword
+            if (Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(name) != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
+            {
+                error = "Interface name cannot be a C# keyword.";
+                return false;
+            }
+
+            return true;
         }
 
         private void ShowMessage(string message)
@@ -233,10 +356,50 @@ namespace InterfaceExtractor.Commands
             VsShellUtilities.ShowMessageBox(
                 this.package,
                 message,
-                "Interface Extractor",
+                Constants.ExtensionName,
                 OLEMSGICON.OLEMSGICON_INFO,
                 OLEMSGBUTTON.OLEMSGBUTTON_OK,
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+        }
+
+        private bool? ShowConfirmation(string message, string title)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var result = VsShellUtilities.ShowMessageBox(
+                this.package,
+                message,
+                title,
+                OLEMSGICON.OLEMSGICON_QUERY,
+                OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+
+            return result == 6; // 6 = Yes, 7 = No
+        }
+    }
+
+    /// <summary>
+    /// Extension methods for JoinableTask fire-and-forget operations
+    /// </summary>
+    internal static class JoinableTaskExtensions
+    {
+        /// <summary>
+        /// Allows fire-and-forget for JoinableTask while ensuring proper exception handling
+        /// </summary>
+        public static void FileAndForget(this Microsoft.VisualStudio.Threading.JoinableTask joinableTask, string context)
+        {
+            // JoinableTask already handles the async operation properly
+            // Just need to observe it to prevent unobserved task exceptions
+            _ = joinableTask.Task.ContinueWith(
+                t =>
+                {
+                    if (t.IsFaulted && t.Exception != null)
+                    {
+                        // Log to activity log
+                        ActivityLog.LogError(context, $"Unhandled exception: {t.Exception.InnerException?.Message ?? t.Exception.Message}");
+                    }
+                },
+                System.Threading.Tasks.TaskScheduler.Default);
         }
     }
 }

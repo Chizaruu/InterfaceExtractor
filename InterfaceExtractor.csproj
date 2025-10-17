@@ -46,6 +46,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Commands\ExtractInterfaceCommand.cs" />
+    <Compile Include="Constants.cs" />
     <Compile Include="InterfaceExtractorPackage.cs" />
     <Compile Include="Services\InterfaceExtractorService.cs" />
     <Compile Include="UI\MemberSelectionItem.cs" />

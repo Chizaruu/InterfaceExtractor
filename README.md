@@ -1,17 +1,23 @@
-# Interface Extractor - Visual Studio Extension
+﻿# Interface Extractor - Visual Studio Extension
 
-A Visual Studio extension that allows you to extract interfaces from C# classes directly from Solution Explorer.
+A Visual Studio extension that allows you to extract interfaces from C# classes directly from Solution Explorer with interactive member selection.
 
 ## Features
 
-- Right-click any C# file in Solution Explorer
-- Select "Extract Interface..." from the context menu
-- Automatically generates interface file in an "Interfaces" subfolder
-- Extracts all public methods and properties
-- Preserves using statements from the original file
-- Handles generic methods with constraints
-- Supports batch processing of multiple files
-- Shows progress in Output Window
+- **Right-click Context Menu** - Extract interfaces from any C# file in Solution Explorer
+- **Interactive Member Selection** - Choose which methods, properties, events, and indexers to include
+- **Smart Defaults** - Automatically suggests interface name with "I" prefix
+- **Multiple Class Support** - Handles files with multiple public classes
+- **Comprehensive Member Support**:
+  - Public methods (including generic methods with constraints)
+  - Public properties (with correct accessor detection)
+  - Public events
+  - Public indexers
+- **Batch Processing** - Process multiple files at once
+- **Output Logging** - Detailed progress and error messages in Output Window
+- **File Overwrite Protection** - Prompts before overwriting existing interfaces
+- **Input Validation** - Ensures valid C# identifiers and prevents reserved keywords
+- **XML Documentation Preservation** - Copies XML comments from original members
 
 ## Requirements
 
@@ -21,7 +27,7 @@ A Visual Studio extension that allows you to extract interfaces from C# classes 
 
 ## Installation
 
-### Option 1: Build and Install from Source
+### Build from Source
 
 1. **Install Visual Studio Extension Development workload**
    - Open Visual Studio Installer
@@ -29,78 +35,82 @@ A Visual Studio extension that allows you to extract interfaces from C# classes 
    - Select "Visual Studio extension development" workload
    - Install
 
-2. **Create the Extension Project**
-   ```bash
-   # Create new folder for the extension
-   mkdir InterfaceExtractor
-   cd InterfaceExtractor
-   ```
+2. **Clone or download the project files**
 
-3. **Add all the provided files to the project:**
-   - `InterfaceExtractor.csproj`
-   - `source.extension.vsixmanifest`
-   - `InterfaceExtractorPackage.vsct`
-   - `InterfaceExtractorPackage.cs`
-   - `Commands/ExtractInterfaceCommand.cs`
-   - `Services/InterfaceExtractorService.cs`
-   - `Properties/AssemblyInfo.cs`
-
-4. **Create Resources folder and add a placeholder icon:**
-   - Create `Resources/ExtractInterface.png` (16x16 PNG)
-   - Create `Resources/Icon.png` (32x32 PNG for extension icon)
-   - Create `Resources/Preview.png` (200x200 PNG for marketplace)
-   - Or use any placeholder images for now
-
-5. **Create LICENSE.txt file**
-   ```
-   MIT License
-   
-   Copyright (c) 2025
-   
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software...
-   ```
-
-6. **Build the Extension**
-   - Open `InterfaceExtractor.csproj` in Visual Studio 2022
-   - Build the solution (F6)
+3. **Build the Extension**
+   - Open `InterfaceExtractor.sln` in Visual Studio 2022
+   - Build the solution (F6 or Ctrl+Shift+B)
    - The VSIX file will be created in `bin/Debug/` or `bin/Release/`
 
-7. **Install the Extension**
+4. **Install the Extension**
    - Close all Visual Studio instances
    - Double-click the `.vsix` file
    - Follow the installation wizard
    - Restart Visual Studio
 
-### Option 2: Quick Install (After Building)
-
-Simply double-click the generated `.vsix` file in the `bin/Debug` or `bin/Release` folder.
-
 ## Usage
+
+### Basic Usage
 
 1. Open any C# solution in Visual Studio
 2. In Solution Explorer, right-click on one or more `.cs` files
 3. Select **"Extract Interface..."** from the context menu
-4. The extension will:
+4. In the dialog:
+   - Review the suggested interface name (defaults to `I{ClassName}`)
+   - Select which members to include (all selected by default)
+   - Click **OK**
+5. The extension will:
    - Create an `Interfaces` folder (if it doesn't exist)
-   - Generate interface files with `I` prefix (e.g., `IBookingData.cs`)
-   - Add the files to your project
-   - Show progress in the Output Window
+   - Generate the interface file (e.g., `IBookingData.cs`)
+   - Add the file to your project
+   - Show results in the Output Window
 
-## Example
+### Member Selection Dialog
+
+The dialog allows you to:
+- **Edit interface name** - Change the default `I{ClassName}` name
+- **Select/deselect members** - Choose exactly which members to include
+- **Select All / Deselect All** - Quick selection buttons
+- **View member signatures** - See the exact interface signature for each member
+
+### Viewing Progress
+
+- Open the Output Window (View > Output or Ctrl+Alt+O)
+- Select "Interface Extractor" from the dropdown
+- View detailed logging of the extraction process
+
+## Examples
+
+### Example 1: Basic Class
 
 **Before (BookingData.cs):**
 ```csharp
 namespace MyProject.Data
 {
+    /// <summary>
+    /// Manages booking data operations
+    /// </summary>
     public class BookingData
     {
+        /// <summary>
+        /// Gets a booking by ID
+        /// </summary>
         public async Task<Booking> GetBookingAsync(Guid id)
         {
             // implementation
         }
         
+        /// <summary>
+        /// Gets or sets the booking name
+        /// </summary>
         public string Name { get; set; }
+        
+        /// <summary>
+        /// Gets the booking date (read-only)
+        /// </summary>
+        public DateTime BookingDate { get; }
+        
+        private void InternalMethod() { } // Not included (private)
     }
 }
 ```
@@ -109,15 +119,146 @@ namespace MyProject.Data
 ```csharp
 namespace MyProject.Data.Interfaces
 {
+    /// <summary>
+    /// Manages booking data operations
+    /// </summary>
     public interface IBookingData
     {
+        /// <summary>
+        /// Gets a booking by ID
+        /// </summary>
         Task<Booking> GetBookingAsync(Guid id);
+
+        /// <summary>
+        /// Gets or sets the booking name
+        /// </summary>
         string Name { get; set; }
+
+        /// <summary>
+        /// Gets the booking date (read-only)
+        /// </summary>
+        DateTime BookingDate { get; }
     }
 }
 ```
 
+### Example 2: Generic Methods with Constraints
+
+**Before:**
+```csharp
+public class Repository
+{
+    public T GetById<T>(int id) where T : class, IEntity, new()
+    {
+        // implementation
+    }
+    
+    public List<T> GetAll<T>() where T : IEntity
+    {
+        // implementation
+    }
+}
+```
+
+**After:**
+```csharp
+public interface IRepository
+{
+    T GetById<T>(int id)
+        where T : class, IEntity, new();
+
+    List<T> GetAll<T>()
+        where T : IEntity;
+}
+```
+
+### Example 3: Events and Indexers
+
+**Before:**
+```csharp
+public class DataCollection
+{
+    public event EventHandler<DataChangedEventArgs> DataChanged;
+    
+    public string this[int index]
+    {
+        get { return items[index]; }
+        set { items[index] = value; }
+    }
+    
+    public int Count { get; }
+}
+```
+
+**After:**
+```csharp
+public interface IDataCollection
+{
+    event EventHandler<DataChangedEventArgs> DataChanged;
+
+    string this[int index] { get; set; }
+
+    int Count { get; }
+}
+```
+
+## Configuration
+
+The extension uses these defaults (can be modified in the source):
+- **Interface Folder**: `Interfaces`
+- **Interface Prefix**: `I`
+- **Namespace Suffix**: `.Interfaces`
+
+To change these defaults, modify the values in `Constants.cs` and rebuild.
+
+## Troubleshooting
+
+### Extension doesn't appear in context menu
+- Ensure you're right-clicking on `.cs` files
+- Restart Visual Studio
+- Check Extensions > Manage Extensions to verify it's installed and enabled
+
+### Build errors
+- Ensure Visual Studio SDK is installed
+- Check that all NuGet packages are restored (right-click solution > Restore NuGet Packages)
+- Target Framework should be .NET Framework 4.8
+- Visual Studio version should be 2022
+
+### Interface not generated correctly
+- Check Output Window (View > Output) and select "Interface Extractor" for detailed logs
+- Ensure the class is public
+- Verify the file contains valid C# code
+- Check that at least one public member exists
+
+### Dialog shows validation errors
+- Interface names must be valid C# identifiers
+- Cannot use C# reserved keywords (class, interface, etc.)
+- At least one member must be selected
+
+### File overwrite prompt
+- The extension will prompt before overwriting existing interface files
+- Choose "Yes" to overwrite or "No" to skip
+
 ## Development
+
+### Project Structure
+
+```
+InterfaceExtractor/
+├── Commands/
+│   └── ExtractInterfaceCommand.cs    # Command handler and orchestration
+├── Services/
+│   └── InterfaceExtractorService.cs  # Core extraction logic using Roslyn
+├── UI/
+│   ├── ExtractInterfaceDialog.xaml   # Member selection dialog
+│   ├── ExtractInterfaceDialog.xaml.cs
+│   └── MemberSelectionItem.cs        # View model for members
+├── Properties/
+│   └── AssemblyInfo.cs               # Assembly metadata
+├── Constants.cs                       # Shared constants
+├── InterfaceExtractorPackage.cs      # VS Package entry point
+└── InterfaceExtractorPackage.vsct    # Command definitions
+```
 
 ### Debugging the Extension
 
@@ -126,55 +267,68 @@ namespace MyProject.Data.Interfaces
 3. A new "Experimental Instance" of Visual Studio will launch
 4. Open your test project in the experimental instance
 5. Test the extension
-6. Check the Output Window for any errors
+6. Check the Output Window for logging (select "Interface Extractor")
 
-### Modifying the Extension
+### Key Technologies
 
-- **Change menu text**: Edit `InterfaceExtractorPackage.vsct`
-- **Modify extraction logic**: Edit `Services/InterfaceExtractorService.cs`
-- **Change command behavior**: Edit `Commands/ExtractInterfaceCommand.cs`
+- **Roslyn (Microsoft.CodeAnalysis)** - C# syntax analysis
+- **Visual Studio SDK** - VS integration and extensibility
+- **WPF** - User interface (dialog)
+- **VSIX** - Extension packaging
 
-## Troubleshooting
+## Known Limitations
 
-### Extension doesn't appear in context menu
-- Ensure you're right-clicking on `.cs` files
-- Restart Visual Studio
-- Check Extensions > Manage Extensions to verify it's installed
+- Only processes public members
+- Does not support operator overloads
+- Static members are excluded
+- Partial classes: only analyzes the current file
+- Nested classes: only top-level classes are processed
 
-### Build errors
-- Ensure Visual Studio SDK is installed
-- Check that all NuGet packages are restored
-- Target Framework should be .NET Framework 4.8
+## Future Enhancements
 
-### Interface not generated correctly
-- Check Output Window (View > Output) for error messages
-- Ensure the class is public
-- Verify the file contains valid C# code
+Potential improvements for future versions:
+- Configuration options page
+- Support for operator overloads
+- Multi-file partial class support
+- Template customization
+- Interface implementation insertion into class
+- Refactoring to use existing interfaces
+- Support for internal members (with option)
 
-## Uninstalling
+## Version History
 
-1. Go to Extensions > Manage Extensions
-2. Find "Interface Extractor"
-3. Click Uninstall
-4. Restart Visual Studio
+### 1.0.0 (2025-01-18)
+- Initial release
+- Basic interface extraction
+- Interactive member selection
+- Support for methods, properties, events, and indexers
+- Batch processing support
+- Output window logging
+- Input validation
+- File overwrite protection
+- XML documentation preservation
+- Multiple class support
 
 ## License
 
 MIT License - Feel free to modify and use as needed.
 
+## Support
+
+For issues, questions, or suggestions:
+1. Check the Output Window for detailed error messages
+2. Review the troubleshooting section above
+3. Check that your Visual Studio and .NET Framework versions are compatible
+
 ## Contributing
 
-This is a basic implementation. Potential improvements:
-- Add dialog to select which members to include
-- Support for events and indexers
-- Better handling of async methods
-- Configuration options
-- Support for multiple classes in one file
+Contributions are welcome! Areas for improvement:
+- Additional member type support
+- Configuration UI
+- More sophisticated namespace handling
+- Template system for interface generation
+- Integration with VS refactoring tools
 
-## Version History
+---
 
-### 1.0.0 (2025-01-17)
-- Initial release
-- Basic interface extraction
-- Solution Explorer integration
-- Batch processing support
+**Happy coding! 🚀**

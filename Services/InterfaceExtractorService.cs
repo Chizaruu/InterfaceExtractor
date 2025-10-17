@@ -12,12 +12,12 @@ namespace InterfaceExtractor.Services
 {
     public class InterfaceExtractorService
     {
-        public async Task<ExtractedClassInfo> AnalyzeClassAsync(string filePath)
+        public async Task<List<ExtractedClassInfo>> AnalyzeClassesAsync(string filePath)
         {
-            return await Task.Run(() => AnalyzeClass(filePath));
+            return await Task.Run(() => AnalyzeClasses(filePath));
         }
 
-        private ExtractedClassInfo AnalyzeClass(string filePath)
+        private List<ExtractedClassInfo> AnalyzeClasses(string filePath)
         {
             try
             {
@@ -25,43 +25,54 @@ namespace InterfaceExtractor.Services
                 var tree = CSharpSyntaxTree.ParseText(sourceCode);
                 var root = tree.GetRoot();
 
-                // Find the first public class
-                var classDeclaration = root.DescendantNodes()
+                // Find all public classes
+                var classDeclarations = root.DescendantNodes()
                     .OfType<ClassDeclarationSyntax>()
-                    .FirstOrDefault(c => c.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword)));
+                    .Where(c => c.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword)))
+                    .ToList();
 
-                if (classDeclaration == null)
+                if (!classDeclarations.Any())
                 {
-                    return null;
+                    return new List<ExtractedClassInfo>(); // Return empty collection instead of null
                 }
 
-                var className = classDeclaration.Identifier.Text;
+                var results = new List<ExtractedClassInfo>();
 
-                // Extract namespace
-                var namespaceDeclaration = classDeclaration.Ancestors()
-                    .OfType<BaseNamespaceDeclarationSyntax>()
-                    .FirstOrDefault();
-
-                var namespaceName = namespaceDeclaration?.Name.ToString() ?? "DefaultNamespace";
-
-                // Extract public methods and properties
-                var members = ExtractPublicMembers(classDeclaration);
-
-                // Extract using statements
+                // Extract using statements once
                 var usings = root.DescendantNodes()
                     .OfType<UsingDirectiveSyntax>()
                     .Select(u => u.ToString())
                     .Distinct()
                     .ToList();
 
-                return new ExtractedClassInfo
+                foreach (var classDeclaration in classDeclarations)
                 {
-                    ClassName = className,
-                    Namespace = namespaceName,
-                    Members = members,
-                    Usings = usings,
-                    FilePath = filePath
-                };
+                    var className = classDeclaration.Identifier.Text;
+
+                    // Extract namespace - simplified condition
+                    var namespaceDeclaration = classDeclaration.Ancestors()
+                        .OfType<BaseNamespaceDeclarationSyntax>()
+                        .FirstOrDefault();
+
+                    var namespaceName = namespaceDeclaration?.Name.ToString() ?? "DefaultNamespace";
+
+                    // Extract public members
+                    var members = ExtractPublicMembers(classDeclaration);
+
+                    if (members.Any())
+                    {
+                        results.Add(new ExtractedClassInfo
+                        {
+                            ClassName = className,
+                            Namespace = namespaceName,
+                            Members = members,
+                            Usings = usings,
+                            FilePath = filePath
+                        });
+                    }
+                }
+
+                return results;
             }
             catch (Exception ex)
             {
@@ -85,7 +96,7 @@ namespace InterfaceExtractor.Services
             }
 
             // Start namespace
-            sb.AppendLine($"namespace {classInfo.Namespace}.Interfaces");
+            sb.AppendLine($"namespace {classInfo.Namespace}{Constants.InterfacesNamespaceSuffix}");
             sb.AppendLine("{");
 
             // Start interface
@@ -93,8 +104,26 @@ namespace InterfaceExtractor.Services
             sb.AppendLine("    {");
 
             // Add selected members
-            foreach (var member in selectedMembers)
+            for (int i = 0; i < selectedMembers.Count; i++)
             {
+                var member = selectedMembers[i];
+
+                // Add blank line between members except for first one
+                if (i > 0)
+                {
+                    sb.AppendLine();
+                }
+
+                // Add XML documentation comment if available
+                if (!string.IsNullOrWhiteSpace(member.Documentation))
+                {
+                    foreach (var line in member.Documentation.Split('\n'))
+                    {
+                        sb.AppendLine($"        {line.TrimEnd()}");
+                    }
+                }
+
+                // Add member signature
                 if (!string.IsNullOrWhiteSpace(member.Constraints))
                 {
                     sb.AppendLine($"        {member.Signature}");
@@ -117,11 +146,11 @@ namespace InterfaceExtractor.Services
         {
             var members = new List<MemberInfo>();
 
-            // Extract public methods
+            // Extract public methods - simplified with Where clause
             var methods = classDeclaration.Members
                 .OfType<MethodDeclarationSyntax>()
-                .Where(m => m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)))
-                .Where(m => !m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
+                .Where(m => m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                           !m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
 
             foreach (var method in methods)
             {
@@ -130,6 +159,7 @@ namespace InterfaceExtractor.Services
                 var parameters = method.ParameterList.ToString();
                 var typeParameters = method.TypeParameterList?.ToString() ?? "";
                 var constraints = string.Join(" ", method.ConstraintClauses.Select(c => c.ToString()));
+                var documentation = ExtractDocumentation(method);
 
                 members.Add(new MemberInfo
                 {
@@ -137,42 +167,129 @@ namespace InterfaceExtractor.Services
                     Signature = $"{returnType} {methodName}{typeParameters}{parameters}",
                     Constraints = constraints,
                     Name = methodName,
-                    ReturnType = returnType
+                    ReturnType = returnType,
+                    Documentation = documentation
                 });
             }
 
-            // Extract public properties
+            // Extract public properties - simplified with Where clause
             var properties = classDeclaration.Members
                 .OfType<PropertyDeclarationSyntax>()
-                .Where(p => p.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)))
-                .Where(p => !p.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
+                .Where(p => p.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                           !p.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
 
             foreach (var property in properties)
             {
                 var propType = property.Type.ToString();
                 var propName = property.Identifier.Text;
-                var accessors = new List<string>();
+                var documentation = ExtractDocumentation(property);
 
+                // Simplified accessor logic using LINQ Where
+                var accessors = new List<string>();
                 if (property.AccessorList != null)
                 {
-                    foreach (var accessor in property.AccessorList.Accessors)
-                    {
-                        accessors.Add(accessor.Keyword.Text);
-                    }
+                    accessors = property.AccessorList.Accessors
+                        .Where(accessor => !accessor.Modifiers.Any(m => m.IsKind(SyntaxKind.PrivateKeyword)))
+                        .Select(accessor => accessor.Keyword.Text)
+                        .ToList();
+                }
+                else if (property.ExpressionBody != null)
+                {
+                    // Expression-bodied property (read-only)
+                    accessors.Add("get");
                 }
 
-                var accessorList = accessors.Any() ? $" {{ {string.Join("; ", accessors)}; }}" : " { get; set; }";
+                var accessorList = accessors.Any()
+                    ? $" {{ {string.Join("; ", accessors)}; }}"
+                    : " { get; }"; // Default to read-only
 
                 members.Add(new MemberInfo
                 {
                     Type = MemberType.Property,
                     Signature = $"{propType} {propName}{accessorList}",
                     Name = propName,
-                    ReturnType = propType
+                    ReturnType = propType,
+                    Documentation = documentation
+                });
+            }
+
+            // Extract public events - simplified with Where clause
+            var events = classDeclaration.Members
+                .OfType<EventFieldDeclarationSyntax>()
+                .Where(e => e.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                           !e.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
+
+            foreach (var eventField in events)
+            {
+                var eventType = eventField.Declaration.Type.ToString();
+                var documentation = ExtractDocumentation(eventField);
+
+                foreach (var variable in eventField.Declaration.Variables)
+                {
+                    var eventName = variable.Identifier.Text;
+
+                    members.Add(new MemberInfo
+                    {
+                        Type = MemberType.Event,
+                        Signature = $"event {eventType} {eventName}",
+                        Name = eventName,
+                        ReturnType = eventType,
+                        Documentation = documentation
+                    });
+                }
+            }
+
+            // Extract public indexers - simplified with Where clause
+            var indexers = classDeclaration.Members
+                .OfType<IndexerDeclarationSyntax>()
+                .Where(i => i.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                           !i.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
+
+            foreach (var indexer in indexers)
+            {
+                var indexerType = indexer.Type.ToString();
+                var parameters = indexer.ParameterList.ToString();
+                var documentation = ExtractDocumentation(indexer);
+
+                // Simplified accessor logic using LINQ Where
+                var accessors = new List<string>();
+                if (indexer.AccessorList != null)
+                {
+                    accessors = indexer.AccessorList.Accessors
+                        .Where(accessor => !accessor.Modifiers.Any(m => m.IsKind(SyntaxKind.PrivateKeyword)))
+                        .Select(accessor => accessor.Keyword.Text)
+                        .ToList();
+                }
+
+                var accessorList = accessors.Any()
+                    ? $" {{ {string.Join("; ", accessors)}; }}"
+                    : " { get; }";
+
+                members.Add(new MemberInfo
+                {
+                    Type = MemberType.Indexer,
+                    Signature = $"{indexerType} this{parameters}{accessorList}",
+                    Name = "this[]",
+                    ReturnType = indexerType,
+                    Documentation = documentation
                 });
             }
 
             return members;
+        }
+
+        private static string ExtractDocumentation(MemberDeclarationSyntax member)
+        {
+            var trivia = member.GetLeadingTrivia()
+                .FirstOrDefault(t => t.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) ||
+                                    t.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia));
+
+            if (trivia != default)
+            {
+                return trivia.ToString().Trim();
+            }
+
+            return string.Empty;
         }
     }
 
@@ -192,11 +309,14 @@ namespace InterfaceExtractor.Services
         public string Constraints { get; set; }
         public string Name { get; set; }
         public string ReturnType { get; set; }
+        public string Documentation { get; set; }
     }
 
     public enum MemberType
     {
         Method,
-        Property
+        Property,
+        Event,
+        Indexer
     }
 }
