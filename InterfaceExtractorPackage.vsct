@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+	<Extern href="stdidcmd.h" />
+	<Extern href="vsshlids.h" />
+
+	<Commands package="guidInterfaceExtractorPackage">
+		<Groups>
+			<Group guid="guidInterfaceExtractorPackageCmdSet" id="MyMenuGroup" priority="0x0600">
+				<Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+			</Group>
+		</Groups>
+
+		<Buttons>
+			<Button guid="guidInterfaceExtractorPackageCmdSet" id="ExtractInterfaceCommandId" priority="0x0100" type="Button">
+				<Parent guid="guidInterfaceExtractorPackageCmdSet" id="MyMenuGroup" />
+				<Strings>
+					<ButtonText>Extract Interface...</ButtonText>
+				</Strings>
+			</Button>
+		</Buttons>
+	</Commands>
+
+	<Symbols>
+		<GuidSymbol name="guidInterfaceExtractorPackage" value="{66ddda57-5adb-4a22-bd7b-973c026474a3}" />
+
+		<GuidSymbol name="guidInterfaceExtractorPackageCmdSet" value="{a4b5c6d7-e8f9-4a5b-9c3d-2e1f0a5b6c7d}">
+			<IDSymbol name="MyMenuGroup" value="0x1020" />
+			<IDSymbol name="ExtractInterfaceCommandId" value="0x0100" />
+		</GuidSymbol>
+	</Symbols>
+</CommandTable>
