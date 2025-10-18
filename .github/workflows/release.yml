@@ -289,7 +289,12 @@ jobs:
           # Get commits with GitHub usernames using GitHub API
           try {
             Write-Host "Fetching commits from GitHub API..."
-            $apiResponse = gh api "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=100" --jq '.[] | "\(.commit.message | split("\n")[0])||\(.author.login // "unknown")||\(.sha[0:7])"'
+            $apiResponse = gh api --paginate "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=100" --jq '.[] | "\(.commit.message | split("\n")[0])||\(.author.login // "unknown")||\(.sha[0:7])"'
+            
+            # Check if gh command succeeded
+            if ($LASTEXITCODE -ne 0 -or -not $apiResponse) {
+              throw "gh api command failed with exit code $LASTEXITCODE"
+            }
             
             $commitList = @()
             foreach ($line in $apiResponse) {
@@ -327,6 +332,12 @@ jobs:
             $commits = "- Initial release"
           }
           
+          # Build installation instructions once (reduce duplication)
+          $installation = "## Installation`n"
+          $installation += "1. Download the `.vsix` file below`n"
+          $installation += "2. Double-click to install in Visual Studio`n"
+          $installation += "3. Or use: ``Extensions > Manage Extensions > Install from file```n"
+          
           # Build release body (using string concatenation to avoid YAML parsing issues)
           $releaseBody = ""
           
@@ -336,10 +347,7 @@ jobs:
             $releaseBody += "**Commit:** ${{ github.sha }}`n`n"
             $releaseBody += "**Changes ($tagInfo):**`n"
             $releaseBody += "$commits`n`n"
-            $releaseBody += "## Installation`n"
-            $releaseBody += "1. Download the `.vsix` file below`n"
-            $releaseBody += "2. Double-click to install in Visual Studio`n"
-            $releaseBody += "3. Or use: ``Extensions > Manage Extensions > Install from file```n"
+            $releaseBody += $installation
           }
           else {
             $emoji = switch ("${{ steps.version-bump.outputs.BUMP_TYPE }}") {
@@ -352,10 +360,7 @@ jobs:
             $releaseBody += "**Version:** v${{ steps.version.outputs.DISPLAY_VERSION }}`n`n"
             $releaseBody += "**Changes ($tagInfo):**`n"
             $releaseBody += "$commits`n`n"
-            $releaseBody += "## Installation`n"
-            $releaseBody += "1. Download the `.vsix` file below`n"
-            $releaseBody += "2. Double-click to install in Visual Studio`n"
-            $releaseBody += "3. Or use: ``Extensions > Manage Extensions > Install from file```n"
+            $releaseBody += $installation
           }
           
           $releaseBody | Out-File -FilePath release-notes.txt -Encoding utf8 -NoNewline
