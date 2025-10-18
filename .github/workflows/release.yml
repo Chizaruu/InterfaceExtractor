@@ -99,13 +99,20 @@ jobs:
           else
             BUMP_TYPE="none"
             CONVENTIONAL_COMMIT_FOUND="false"
-            echo "📝 No conventional commit detected → Will only increment prerelease number"
+            echo "⏭️ No conventional commit detected → Skipping build"
+            echo ""
+            echo "ℹ️ Use conventional commit format to trigger a release:"
+            echo "  • feat: for new features (minor version bump)"
+            echo "  • fix: for bug fixes (patch version bump)"
+            echo "  • chore/docs/style/refactor/perf/test: for maintenance (patch version bump)"
+            echo "  • BREAKING CHANGE or !: for breaking changes (major version bump)"
           fi
           
           echo "BUMP_TYPE=$BUMP_TYPE" >> $GITHUB_OUTPUT
           echo "CONVENTIONAL_COMMIT_FOUND=$CONVENTIONAL_COMMIT_FOUND" >> $GITHUB_OUTPUT
-
+      
       - name: Auto-increment version
+        if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         id: version
         shell: pwsh
         run: |
@@ -229,6 +236,7 @@ jobs:
           "RELEASE_TYPE=$releaseType" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       
       - name: Commit and push version bump
+        if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -246,9 +254,11 @@ jobs:
           fi
       
       - name: Build Extension
+        if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:minimal /m
       
       - name: Locate VSIX file
+        if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         id: locate-vsix
         shell: bash
         run: |
@@ -270,6 +280,7 @@ jobs:
           echo "VSIX_NAME=$NEW_VSIX_NAME" >> $GITHUB_OUTPUT
       
       - name: Create and push git tag
+        if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -278,6 +289,7 @@ jobs:
           git push origin "${{ steps.version.outputs.TAG_NAME }}"
       
       - name: Generate release notes
+        if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         id: release-notes
         shell: pwsh
         run: |
@@ -427,6 +439,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       
       - name: Create GitHub Release with VSIX
+        if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.TAG_NAME }}
