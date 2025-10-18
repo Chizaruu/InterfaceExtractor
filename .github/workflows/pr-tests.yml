@@ -61,23 +61,6 @@ jobs:
       - name: Build Tests
         run: msbuild InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj /p:Configuration=Debug /v:minimal /m
       
-      # Debug: Show what was built
-      - name: List build output
-        shell: pwsh
-        run: |
-          Write-Host "Looking for test DLL..."
-          if (Test-Path "InterfaceExtractor.Tests\bin\Debug") {
-            Get-ChildItem -Path "InterfaceExtractor.Tests\bin\Debug" -Recurse | Where-Object { $_.Extension -eq ".dll" } | ForEach-Object {
-              Write-Host "Found: $($_.FullName)"
-            }
-          } else {
-            Write-Host "Debug directory not found!"
-            Write-Host "Listing InterfaceExtractor.Tests\bin contents:"
-            if (Test-Path "InterfaceExtractor.Tests\bin") {
-              Get-ChildItem -Path "InterfaceExtractor.Tests\bin" -Recurse
-            }
-          }
-      
       - name: Setup VSTest
         uses: darenm/Setup-VSTest@v1.2
       

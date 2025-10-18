@@ -98,8 +98,8 @@ jobs:
           # Read current version from vsixmanifest using sed (Windows compatible)
           MANIFEST_FILE="InterfaceExtractor.Extension/source.extension.vsixmanifest"
           
-          # Extract version using sed instead of grep -P
-          CURRENT_VERSION=$(sed -n 's/.*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE" | head -1)
+          # Extract version from Identity element specifically
+          CURRENT_VERSION=$(sed -n 's/.*<Identity.*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE")
           
           if [ -z "$CURRENT_VERSION" ]; then
             echo "❌ Could not read version from manifest"
@@ -178,11 +178,11 @@ jobs:
           
           echo "New version will be: $NEW_VERSION (display: $DISPLAY_VERSION)"
           
-          # Update version in vsixmanifest - use a more robust sed command
-          sed -i.bak "s/Version=\"[^\"]*\"/Version=\"${NEW_VERSION}\"/" "$MANIFEST_FILE"
+          # Update ONLY the Identity element's Version attribute (not PackageManifest)
+          sed -i.bak 's/\(<Identity.*Version="\)[^"]*\(".*\)/\1'"${NEW_VERSION}"'\2/' "$MANIFEST_FILE"
           
           # Verify the change
-          NEW_VERSION_CHECK=$(sed -n 's/.*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE" | head -1)
+          NEW_VERSION_CHECK=$(sed -n 's/.*<Identity.*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE")
           echo "Verified new version in manifest: $NEW_VERSION_CHECK"
           
           if [ "$NEW_VERSION_CHECK" != "$NEW_VERSION" ]; then
@@ -197,7 +197,6 @@ jobs:
           echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_OUTPUT
           echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_OUTPUT
           echo "RELEASE_TYPE=$RELEASE_TYPE" >> $GITHUB_OUTPUT
-      
       - name: Build Extension
         run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:minimal /m
       
