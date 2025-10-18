@@ -1,9 +1,25 @@
 name: Visual Studio Extension Release
+
+permissions:
+  contents: write  # Needed for creating releases and pushing tags
+
 on:
   push:
     branches:
       - main
       - dev
+    paths:
+      - '**.cs'
+      - '**.csproj'
+      - '**.xaml'
+      - '**.vsct'
+      - '**.vsixmanifest'
+      - '.github/workflows/release.yml'
+
+# Prevent multiple releases from running simultaneously
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false  # Don't cancel releases, queue them
 
 jobs:
   build-and-publish:
@@ -21,6 +37,17 @@ jobs:
       
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
+      
+      # Cache NuGet packages
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ${{ github.workspace }}/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
       
       - name: Restore NuGet packages
         run: nuget restore InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj
@@ -68,9 +95,19 @@ jobs:
         id: version
         shell: bash
         run: |
-          # Read current version from vsixmanifest
+          # Read current version from vsixmanifest using sed (Windows compatible)
           MANIFEST_FILE="InterfaceExtractor.Extension/source.extension.vsixmanifest"
-          CURRENT_VERSION=$(grep -oP 'Version="\K[^"]+' "$MANIFEST_FILE" | head -1)
+          
+          # Extract version using sed instead of grep -P
+          CURRENT_VERSION=$(sed -n 's/.*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE" | head -1)
+          
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "❌ Could not read version from manifest"
+            exit 1
+          fi
+          
+          echo "Current version: $CURRENT_VERSION"
+          
           BUMP_TYPE="${{ steps.version-bump.outputs.BUMP_TYPE }}"
           BRANCH_NAME="${{ github.ref_name }}"
           
@@ -139,8 +176,19 @@ jobs:
             echo "📦 Production version: $DISPLAY_VERSION (${BUMP_TYPE} bump)"
           fi
           
-          # Update version in vsixmanifest
-          sed -i "s/Version=\"[^\"]*\"/Version=\"${NEW_VERSION}\"/" "$MANIFEST_FILE"
+          echo "New version will be: $NEW_VERSION (display: $DISPLAY_VERSION)"
+          
+          # Update version in vsixmanifest - use a more robust sed command
+          sed -i.bak "s/Version=\"[^\"]*\"/Version=\"${NEW_VERSION}\"/" "$MANIFEST_FILE"
+          
+          # Verify the change
+          NEW_VERSION_CHECK=$(sed -n 's/.*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE" | head -1)
+          echo "Verified new version in manifest: $NEW_VERSION_CHECK"
+          
+          if [ "$NEW_VERSION_CHECK" != "$NEW_VERSION" ]; then
+            echo "❌ Version update failed!"
+            exit 1
+          fi
           
           echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "DISPLAY_VERSION=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
@@ -151,7 +199,7 @@ jobs:
           echo "RELEASE_TYPE=$RELEASE_TYPE" >> $GITHUB_OUTPUT
       
       - name: Build Extension
-        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:m
+        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:minimal /m
       
       - name: Locate VSIX file
         id: locate-vsix
