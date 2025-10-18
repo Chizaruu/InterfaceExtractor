@@ -1,6 +1,7 @@
 ﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using InterfaceExtractor.Options;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -12,6 +13,13 @@ namespace InterfaceExtractor.Services
 {
     public class InterfaceExtractorService
     {
+        private readonly ExtractorOptions _options;
+
+        public InterfaceExtractorService(ExtractorOptions options = null)
+        {
+            _options = options ?? new ExtractorOptions();
+        }
+
         public async Task<List<ExtractedClassInfo>> AnalyzeClassesAsync(string filePath)
         {
             return await Task.Run(() => AnalyzeClasses(filePath));
@@ -33,7 +41,7 @@ namespace InterfaceExtractor.Services
 
                 if (!classDeclarations.Any())
                 {
-                    return new List<ExtractedClassInfo>(); // Return empty collection instead of null
+                    return new List<ExtractedClassInfo>();
                 }
 
                 var results = new List<ExtractedClassInfo>();
@@ -49,7 +57,7 @@ namespace InterfaceExtractor.Services
                 {
                     var className = classDeclaration.Identifier.Text;
 
-                    // Extract namespace - simplified condition
+                    // Extract namespace
                     var namespaceDeclaration = classDeclaration.Ancestors()
                         .OfType<BaseNamespaceDeclarationSyntax>()
                         .FirstOrDefault();
@@ -80,9 +88,22 @@ namespace InterfaceExtractor.Services
             }
         }
 
-        public static string GenerateInterface(string interfaceName, ExtractedClassInfo classInfo, List<MemberInfo> selectedMembers)
+        public string GenerateInterface(string interfaceName, ExtractedClassInfo classInfo, List<MemberInfo> selectedMembers)
         {
             var sb = new StringBuilder();
+
+            // Add file header if enabled
+            if (_options.IncludeFileHeader && !string.IsNullOrWhiteSpace(_options.FileHeaderTemplate))
+            {
+                var header = _options.FileHeaderTemplate
+                    .Replace("{FileName}", $"{interfaceName}.cs")
+                    .Replace("{Date}", DateTime.Now.ToString("yyyy-MM-dd"))
+                    .Replace("{Time}", DateTime.Now.ToString("HH:mm:ss"))
+                    .Replace("\\n", "\n");
+
+                sb.AppendLine(header);
+                sb.AppendLine();
+            }
 
             // Add usings
             foreach (var usingDirective in classInfo.Usings)
@@ -96,22 +117,51 @@ namespace InterfaceExtractor.Services
             }
 
             // Start namespace
-            sb.AppendLine($"namespace {classInfo.Namespace}{Constants.InterfacesNamespaceSuffix}");
+            sb.AppendLine($"namespace {classInfo.Namespace}{_options.InterfacesNamespaceSuffix}");
             sb.AppendLine("{");
 
             // Start interface
             sb.AppendLine($"    public interface {interfaceName}");
             sb.AppendLine("    {");
 
-            // Add selected members
-            for (int i = 0; i < selectedMembers.Count; i++)
-            {
-                var member = selectedMembers[i];
+            // Sort and group members if requested
+            var membersToGenerate = selectedMembers.ToList();
 
-                // Add blank line between members except for first one
+            if (_options.SortMembers)
+            {
+                membersToGenerate = membersToGenerate
+                    .OrderBy(m => m.Type)
+                    .ThenBy(m => m.Name)
+                    .ToList();
+            }
+
+            if (_options.GroupByMemberType)
+            {
+                membersToGenerate = membersToGenerate
+                    .OrderBy(m => GetMemberTypeOrder(m.Type))
+                    .ThenBy(m => m.Name)
+                    .ToList();
+            }
+
+            // Add members
+            for (int i = 0; i < membersToGenerate.Count; i++)
+            {
+                var member = membersToGenerate[i];
+
+                // Add separator lines between members (except before first)
                 if (i > 0)
                 {
-                    sb.AppendLine();
+                    for (int j = 0; j < _options.MemberSeparatorLines; j++)
+                    {
+                        sb.AppendLine();
+                    }
+                }
+
+                // Add group comment if grouping is enabled
+                if (_options.GroupByMemberType &&
+                    (i == 0 || membersToGenerate[i - 1].Type != member.Type))
+                {
+                    sb.AppendLine($"        // {GetMemberTypeGroupName(member.Type)}");
                 }
 
                 // Add XML documentation comment if available
@@ -122,7 +172,6 @@ namespace InterfaceExtractor.Services
                         var trimmedLine = line.Trim();
                         if (!string.IsNullOrWhiteSpace(trimmedLine))
                         {
-                            // Ensure the line starts with ///
                             if (trimmedLine.StartsWith("///"))
                             {
                                 sb.AppendLine($"        {trimmedLine}");
@@ -143,10 +192,7 @@ namespace InterfaceExtractor.Services
                 }
                 else
                 {
-                    // Only add semicolon if the signature doesn't end with }
-                    // Properties/indexers with accessor blocks end with }, methods/events don't
                     var needsSemicolon = !member.Signature.TrimEnd().EndsWith("}");
-
                     if (needsSemicolon)
                     {
                         sb.AppendLine($"        {member.Signature};");
@@ -169,7 +215,7 @@ namespace InterfaceExtractor.Services
         {
             var members = new List<MemberInfo>();
 
-            // Extract public methods - simplified with Where clause
+            // Extract public methods
             var methods = classDeclaration.Members
                 .OfType<MethodDeclarationSyntax>()
                 .Where(m => m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
@@ -195,7 +241,7 @@ namespace InterfaceExtractor.Services
                 });
             }
 
-            // Extract public properties - simplified with Where clause
+            // Extract public properties
             var properties = classDeclaration.Members
                 .OfType<PropertyDeclarationSyntax>()
                 .Where(p => p.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
@@ -207,7 +253,6 @@ namespace InterfaceExtractor.Services
                 var propName = property.Identifier.Text;
                 var documentation = ExtractDocumentation(property);
 
-                // Simplified accessor logic using LINQ Where
                 var accessors = new List<string>();
                 if (property.AccessorList != null)
                 {
@@ -218,13 +263,12 @@ namespace InterfaceExtractor.Services
                 }
                 else if (property.ExpressionBody != null)
                 {
-                    // Expression-bodied property (read-only)
                     accessors.Add("get");
                 }
 
                 var accessorList = accessors.Any()
                     ? $" {{ {string.Join("; ", accessors)}; }}"
-                    : " { get; }"; // Default to read-only
+                    : " { get; }";
 
                 members.Add(new MemberInfo
                 {
@@ -236,7 +280,7 @@ namespace InterfaceExtractor.Services
                 });
             }
 
-            // Extract public events - simplified with Where clause
+            // Extract public events
             var events = classDeclaration.Members
                 .OfType<EventFieldDeclarationSyntax>()
                 .Where(e => e.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
@@ -262,7 +306,7 @@ namespace InterfaceExtractor.Services
                 }
             }
 
-            // Extract public indexers - simplified with Where clause
+            // Extract public indexers
             var indexers = classDeclaration.Members
                 .OfType<IndexerDeclarationSyntax>()
                 .Where(i => i.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
@@ -274,7 +318,6 @@ namespace InterfaceExtractor.Services
                 var parameters = indexer.ParameterList.ToString();
                 var documentation = ExtractDocumentation(indexer);
 
-                // Simplified accessor logic using LINQ Where
                 var accessors = new List<string>();
                 if (indexer.AccessorList != null)
                 {
@@ -298,6 +341,53 @@ namespace InterfaceExtractor.Services
                 });
             }
 
+            // Extract operator overloads (if enabled in options)
+            if (_options.IncludeOperatorOverloads)
+            {
+                var operators = classDeclaration.Members
+                    .OfType<OperatorDeclarationSyntax>()
+                    .Where(o => o.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)));
+
+                foreach (var op in operators)
+                {
+                    var returnType = op.ReturnType.ToString();
+                    var operatorToken = op.OperatorToken.Text;
+                    var parameters = op.ParameterList.ToString();
+                    var documentation = ExtractDocumentation(op);
+
+                    members.Add(new MemberInfo
+                    {
+                        Type = MemberType.Operator,
+                        Signature = $"{returnType} operator {operatorToken}{parameters}",
+                        Name = $"operator {operatorToken}",
+                        ReturnType = returnType,
+                        Documentation = documentation
+                    });
+                }
+
+                // Extract conversion operators
+                var conversions = classDeclaration.Members
+                    .OfType<ConversionOperatorDeclarationSyntax>()
+                    .Where(c => c.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)));
+
+                foreach (var conversion in conversions)
+                {
+                    var conversionType = conversion.Type.ToString();
+                    var implicitOrExplicit = conversion.ImplicitOrExplicitKeyword.Text;
+                    var parameters = conversion.ParameterList.ToString();
+                    var documentation = ExtractDocumentation(conversion);
+
+                    members.Add(new MemberInfo
+                    {
+                        Type = MemberType.Operator,
+                        Signature = $"{implicitOrExplicit} operator {conversionType}{parameters}",
+                        Name = $"{implicitOrExplicit} operator {conversionType}",
+                        ReturnType = conversionType,
+                        Documentation = documentation
+                    });
+                }
+            }
+
             return members;
         }
 
@@ -315,46 +405,41 @@ namespace InterfaceExtractor.Services
             return string.Empty;
         }
 
-        /// <summary>
-        /// Appends the interface to the class declaration
-        /// </summary>
-        public static string AppendInterfaceToClass(string sourceCode, string className, string interfaceName, string interfaceNamespace)
+        public string AppendInterfaceToClass(string sourceCode, string className, string interfaceName, string interfaceNamespace)
         {
+            if (!_options.AutoUpdateClass)
+            {
+                return sourceCode; // Don't update if disabled
+            }
+
             var tree = CSharpSyntaxTree.ParseText(sourceCode);
             var root = (CompilationUnitSyntax)tree.GetRoot();
 
-            // Find the target class
             var classDeclaration = root.DescendantNodes()
                 .OfType<ClassDeclarationSyntax>()
                 .FirstOrDefault(c => c.Identifier.Text == className);
 
             if (classDeclaration == null)
             {
-                return sourceCode; // Class not found, return original
+                return sourceCode;
             }
 
-            // Get the class's namespace
             var classNamespace = classDeclaration.Ancestors()
                 .OfType<BaseNamespaceDeclarationSyntax>()
                 .FirstOrDefault();
 
             var classNamespaceName = classNamespace?.Name.ToString() ?? "";
 
-            // Determine if we need to use fully qualified name
             string interfaceToAdd;
-            if (classNamespaceName == interfaceNamespace ||
-                string.IsNullOrEmpty(interfaceNamespace))
+            if (classNamespaceName == interfaceNamespace || string.IsNullOrEmpty(interfaceNamespace))
             {
-                // Same namespace, use simple name
                 interfaceToAdd = interfaceName;
             }
             else
             {
-                // Different namespace, use fully qualified name
                 interfaceToAdd = $"{interfaceNamespace}.{interfaceName}";
             }
 
-            // Check if interface is already implemented
             if (classDeclaration.BaseList != null)
             {
                 var existingBases = classDeclaration.BaseList.Types
@@ -363,16 +448,14 @@ namespace InterfaceExtractor.Services
 
                 if (existingBases.Any(b => b.Contains(interfaceName)))
                 {
-                    return sourceCode; // Already implements this interface
+                    return sourceCode;
                 }
             }
 
-            // Add the interface to the base list
             ClassDeclarationSyntax newClassDeclaration;
 
             if (classDeclaration.BaseList == null)
             {
-                // No base list, create one
                 var baseType = SyntaxFactory.SimpleBaseType(
                     SyntaxFactory.ParseTypeName(interfaceToAdd));
 
@@ -383,7 +466,6 @@ namespace InterfaceExtractor.Services
             }
             else
             {
-                // Add to existing base list
                 var baseType = SyntaxFactory.SimpleBaseType(
                     SyntaxFactory.ParseTypeName(interfaceToAdd));
 
@@ -391,17 +473,15 @@ namespace InterfaceExtractor.Services
                 newClassDeclaration = classDeclaration.WithBaseList(newBaseList);
             }
 
-            // Replace the old class with the new one
             var newRoot = root.ReplaceNode(classDeclaration, newClassDeclaration);
 
-            // Add using directive if needed (for different namespace)
-            if (classNamespaceName != interfaceNamespace &&
+            if (_options.AddUsingDirective &&
+                classNamespaceName != interfaceNamespace &&
                 !string.IsNullOrEmpty(interfaceNamespace))
             {
                 var usingDirective = SyntaxFactory.UsingDirective(
                     SyntaxFactory.ParseName(interfaceNamespace));
 
-                // Check if using already exists
                 var existingUsings = newRoot.Usings
                     .Select(u => u.Name.ToString())
                     .ToList();
@@ -412,8 +492,55 @@ namespace InterfaceExtractor.Services
                 }
             }
 
-            // Add NormalizeWhitespace() to properly format the output
             return newRoot.NormalizeWhitespace().ToFullString();
+        }
+
+        private static int GetMemberTypeOrder(MemberType type)
+        {
+            switch (type)
+            {
+                case MemberType.Property:
+                    return 1;
+
+                case MemberType.Method:
+                    return 2;
+
+                case MemberType.Event:
+                    return 3;
+
+                case MemberType.Indexer:
+                    return 4;
+
+                case MemberType.Operator:
+                    return 5;
+
+                default:
+                    return 99;
+            }
+        }
+
+        private static string GetMemberTypeGroupName(MemberType type)
+        {
+            switch (type)
+            {
+                case MemberType.Property:
+                    return "Properties";
+
+                case MemberType.Method:
+                    return "Methods";
+
+                case MemberType.Event:
+                    return "Events";
+
+                case MemberType.Indexer:
+                    return "Indexers";
+
+                case MemberType.Operator:
+                    return "Operators";
+
+                default:
+                    return "Members";
+            }
         }
     }
 
@@ -441,6 +568,7 @@ namespace InterfaceExtractor.Services
         Method,
         Property,
         Event,
-        Indexer
+        Indexer,
+        Operator  // NEW in v1.1
     }
 }
