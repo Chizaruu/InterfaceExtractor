@@ -56,11 +56,41 @@ jobs:
       - name: Build Tests
         run: msbuild InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj /p:Configuration=Debug /v:minimal /m
       
+      # Debug: Show what was built
+      - name: List build output
+        shell: pwsh
+        run: |
+          Write-Host "Looking for test DLL..."
+          if (Test-Path "InterfaceExtractor.Tests\bin\Debug") {
+            Get-ChildItem -Path "InterfaceExtractor.Tests\bin\Debug" -Recurse | Where-Object { $_.Extension -eq ".dll" } | ForEach-Object {
+              Write-Host "Found: $($_.FullName)"
+            }
+          } else {
+            Write-Host "Debug directory not found!"
+            Write-Host "Listing InterfaceExtractor.Tests\bin contents:"
+            if (Test-Path "InterfaceExtractor.Tests\bin") {
+              Get-ChildItem -Path "InterfaceExtractor.Tests\bin" -Recurse
+            }
+          }
+      
       - name: Setup VSTest
         uses: darenm/Setup-VSTest@v1.2
       
       - name: Run Tests
-        run: vstest.console.exe InterfaceExtractor.Tests/bin/Debug/InterfaceExtractor.Tests.dll /logger:trx /ResultsDirectory:TestResults
+        shell: pwsh
+        run: |
+          # Find the test DLL (might be in net48 subdirectory)
+          $testDll = Get-ChildItem -Path "InterfaceExtractor.Tests\bin\Debug" -Filter "InterfaceExtractor.Tests.dll" -Recurse | Select-Object -First 1
+          
+          if ($null -eq $testDll) {
+            Write-Host "❌ Test DLL not found!"
+            exit 1
+          }
+          
+          Write-Host "✅ Found test DLL at: $($testDll.FullName)"
+          
+          # Run tests
+          vstest.console.exe $testDll.FullName /logger:trx /ResultsDirectory:TestResults
       
       - name: Publish Test Results
         uses: EnricoMi/publish-unit-test-result-action/windows@v2
@@ -78,7 +108,7 @@ jobs:
         with:
           name: test-results
           path: TestResults/
-          retention-days: 7 
+          retention-days: 7
       
       - name: Test Summary
         if: always()
