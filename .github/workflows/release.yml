@@ -100,111 +100,125 @@ jobs:
       
       - name: Auto-increment version
         id: version
-        shell: bash
+        shell: pwsh
         run: |
-          # Read current version from vsixmanifest using sed (Windows compatible)
-          MANIFEST_FILE="InterfaceExtractor.Extension/source.extension.vsixmanifest"
+          # Read current version from vsixmanifest using PowerShell XML parsing
+          $manifestFile = "InterfaceExtractor.Extension/source.extension.vsixmanifest"
           
-          # Extract version from Identity element specifically
-          CURRENT_VERSION=$(sed -n 's/.*<Identity[^>]*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE")
+          # Load XML properly
+          [xml]$manifest = Get-Content $manifestFile
+          $currentVersion = $manifest.PackageManifest.Metadata.Identity.Version
           
-          if [ -z "$CURRENT_VERSION" ]; then
-            echo "❌ Could not read version from manifest"
+          if ([string]::IsNullOrEmpty($currentVersion)) {
+            Write-Host "❌ Could not read version from manifest"
             exit 1
-          fi
+          }
           
-          echo "Current version: $CURRENT_VERSION"
+          Write-Host "Current version: $currentVersion"
           
-          BUMP_TYPE="${{ steps.version-bump.outputs.BUMP_TYPE }}"
-          BRANCH_NAME="${{ github.ref_name }}"
+          $bumpType = "${{ steps.version-bump.outputs.BUMP_TYPE }}"
+          $branchName = "${{ github.ref_name }}"
           
           # Parse version components
-          IFS='.' read -r MAJOR MINOR PATCH BUILD <<< "$CURRENT_VERSION"
+          $versionParts = $currentVersion.Split('.')
+          $major = [int]$versionParts[0]
+          $minor = [int]$versionParts[1]
+          $patch = [int]$versionParts[2]
           
-          # Determine new version based on bump type (for main branch)
-          if [[ "$BUMP_TYPE" == "major" ]]; then
-            MAJOR=$((MAJOR + 1))
-            MINOR=0
-            PATCH=0
-          elif [[ "$BUMP_TYPE" == "minor" ]]; then
-            MINOR=$((MINOR + 1))
-            PATCH=0
-          else
-            PATCH=$((PATCH + 1))
-          fi
+          # Determine new version based on bump type
+          if ($bumpType -eq "major") {
+            $major++
+            $minor = 0
+            $patch = 0
+          }
+          elseif ($bumpType -eq "minor") {
+            $minor++
+            $patch = 0
+          }
+          else {
+            $patch++
+          }
           
-          BASE_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          $baseVersion = "$major.$minor.$patch"
           
           # Determine prerelease type based on branch
-          if [[ "$BRANCH_NAME" == *"testing"* ]]; then
+          if ($branchName -like "*testing*") {
             # Testing branches: find the next testing prerelease number
-            LAST_TESTING_TAG=$(git tag -l "v${BASE_VERSION}-testing.*" --sort=-version:refname | head -n 1)
-            if [ -z "$LAST_TESTING_TAG" ]; then
-              PRERELEASE_NUM=0
-            else
-              LAST_NUM=$(echo "$LAST_TESTING_TAG" | sed -n 's/.*-testing\.\([0-9]*\).*/\1/p')
-              PRERELEASE_NUM=$((LAST_NUM + 1))
-            fi
+            $lastTestingTag = git tag -l "v$baseVersion-testing.*" --sort=-version:refname | Select-Object -First 1
             
-            PRERELEASE_NUM=$(printf "%02d" $PRERELEASE_NUM)
-            NEW_VERSION="${BASE_VERSION}.${PRERELEASE_NUM}"
-            DISPLAY_VERSION="${BASE_VERSION}-testing.${PRERELEASE_NUM}"
-            IS_PRERELEASE="true"
-            TAG_NAME="v${DISPLAY_VERSION}"
-            RELEASE_NAME="v${DISPLAY_VERSION} 🧪 Testing Release"
-            RELEASE_TYPE="testing"
-            echo "🧪 Testing version: $DISPLAY_VERSION"
-          elif [[ "$BRANCH_NAME" == "dev" ]]; then
+            if ([string]::IsNullOrEmpty($lastTestingTag)) {
+              $prereleaseNum = 0
+            }
+            else {
+              $lastTestingTag -match 'testing\.(\d+)' | Out-Null
+              $prereleaseNum = [int]$matches[1] + 1
+            }
+            
+            $prereleaseNum = $prereleaseNum.ToString("00")
+            $newVersion = "$baseVersion.$prereleaseNum"
+            $displayVersion = "$baseVersion-testing.$prereleaseNum"
+            $isPrerelease = "true"
+            $tagName = "v$displayVersion"
+            $releaseName = "v$displayVersion 🧪 Testing Release"
+            $releaseType = "testing"
+            Write-Host "🧪 Testing version: $displayVersion"
+          }
+          elseif ($branchName -eq "dev") {
             # Dev branch: find the next dev prerelease number
-            LAST_DEV_TAG=$(git tag -l "v${BASE_VERSION}-dev.*" --sort=-version:refname | head -n 1)
-            if [ -z "$LAST_DEV_TAG" ]; then
-              PRERELEASE_NUM=0
-            else
-              LAST_NUM=$(echo "$LAST_DEV_TAG" | sed -n 's/.*-dev\.\([0-9]*\).*/\1/p')
-              PRERELEASE_NUM=$((LAST_NUM + 1))
-            fi
+            $lastDevTag = git tag -l "v$baseVersion-dev.*" --sort=-version:refname | Select-Object -First 1
             
-            PRERELEASE_NUM=$(printf "%02d" $PRERELEASE_NUM)
-            NEW_VERSION="${BASE_VERSION}.${PRERELEASE_NUM}"
-            DISPLAY_VERSION="${BASE_VERSION}-dev.${PRERELEASE_NUM}"
-            IS_PRERELEASE="true"
-            TAG_NAME="v${DISPLAY_VERSION}"
-            RELEASE_NAME="v${DISPLAY_VERSION} 🔧 Dev Release"
-            RELEASE_TYPE="dev"
-            echo "🔧 Dev version: $DISPLAY_VERSION"
-          else
+            if ([string]::IsNullOrEmpty($lastDevTag)) {
+              $prereleaseNum = 0
+            }
+            else {
+              $lastDevTag -match 'dev\.(\d+)' | Out-Null
+              $prereleaseNum = [int]$matches[1] + 1
+            }
+            
+            $prereleaseNum = $prereleaseNum.ToString("00")
+            $newVersion = "$baseVersion.$prereleaseNum"
+            $displayVersion = "$baseVersion-dev.$prereleaseNum"
+            $isPrerelease = "true"
+            $tagName = "v$displayVersion"
+            $releaseName = "v$displayVersion 🔧 Dev Release"
+            $releaseType = "dev"
+            Write-Host "🔧 Dev version: $displayVersion"
+          }
+          else {
             # Main branch: production release
-            NEW_VERSION="${BASE_VERSION}.0"
-            DISPLAY_VERSION="${BASE_VERSION}"
-            IS_PRERELEASE="false"
-            TAG_NAME="v${DISPLAY_VERSION}"
-            RELEASE_NAME="v${DISPLAY_VERSION} Release"
-            RELEASE_TYPE="production"
-            echo "📦 Production version: $DISPLAY_VERSION (${BUMP_TYPE} bump)"
-          fi
+            $newVersion = "$baseVersion.0"
+            $displayVersion = $baseVersion
+            $isPrerelease = "false"
+            $tagName = "v$displayVersion"
+            $releaseName = "v$displayVersion Release"
+            $releaseType = "production"
+            Write-Host "📦 Production version: $displayVersion ($bumpType bump)"
+          }
           
-          echo "New version will be: $NEW_VERSION (display: $DISPLAY_VERSION)"
+          Write-Host "New version will be: $newVersion (display: $displayVersion)"
           
-          # Update ONLY the Identity element's Version attribute
-          sed -i.bak 's/\(<Identity[^>]*Version="\)[^"]*\(".*\)/\1'"${NEW_VERSION}"'\2/' "$MANIFEST_FILE"
+          # Update version in XML using proper XML manipulation
+          $manifest.PackageManifest.Metadata.Identity.Version = $newVersion
+          $manifest.Save((Resolve-Path $manifestFile))
           
           # Verify the change
-          NEW_VERSION_CHECK=$(sed -n 's/.*<Identity[^>]*Version="\([^"]*\)".*/\1/p' "$MANIFEST_FILE")
-          echo "Verified new version in manifest: $NEW_VERSION_CHECK"
+          [xml]$verifyManifest = Get-Content $manifestFile
+          $newVersionCheck = $verifyManifest.PackageManifest.Metadata.Identity.Version
+          Write-Host "Verified new version in manifest: $newVersionCheck"
           
-          if [ "$NEW_VERSION_CHECK" != "$NEW_VERSION" ]; then
-            echo "❌ Version update failed!"
+          if ($newVersionCheck -ne $newVersion) {
+            Write-Host "❌ Version update failed!"
             exit 1
-          fi
+          }
           
-          echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "DISPLAY_VERSION=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
-          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "BUMP_TYPE=$BUMP_TYPE" >> $GITHUB_OUTPUT
-          echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_OUTPUT
-          echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_OUTPUT
-          echo "RELEASE_TYPE=$RELEASE_TYPE" >> $GITHUB_OUTPUT
-
+          # Set outputs
+          "VERSION=$newVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "DISPLAY_VERSION=$displayVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "TAG_NAME=$tagName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "BUMP_TYPE=$bumpType" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "IS_PRERELEASE=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "RELEASE_TYPE=$releaseType" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       - name: Build Extension
         run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:minimal /m
       
