@@ -73,31 +73,38 @@ jobs:
           echo "$COMMITS"
           
           # Determine bump type based on conventional commits
-          BUMP_TYPE="patch"
+          BUMP_TYPE="none"
+          CONVENTIONAL_COMMIT_FOUND="false"
           
           # Check for breaking changes (major version)
           if echo "$COMMITS" | grep -qiE "^(BREAKING CHANGE|.*!:)"; then
             BUMP_TYPE="major"
+            CONVENTIONAL_COMMIT_FOUND="true"
             echo "🚨 Breaking change detected → MAJOR version bump"
           # Check for features (minor version)
           elif echo "$COMMITS" | grep -qiE "^feat(\(.*\))?:"; then
             BUMP_TYPE="minor"
+            CONVENTIONAL_COMMIT_FOUND="true"
             echo "✨ New feature detected → MINOR version bump"
           # Check for fixes (patch version)
           elif echo "$COMMITS" | grep -qiE "^fix(\(.*\))?:"; then
             BUMP_TYPE="patch"
+            CONVENTIONAL_COMMIT_FOUND="true"
             echo "🐛 Bug fix detected → PATCH version bump"
           # Check for other conventional commit types
           elif echo "$COMMITS" | grep -qiE "^(chore|docs|style|refactor|perf|test|build|ci)(\(.*\))?:"; then
             BUMP_TYPE="patch"
+            CONVENTIONAL_COMMIT_FOUND="true"
             echo "🔧 Maintenance commit detected → PATCH version bump"
           else
-            BUMP_TYPE="patch"
-            echo "📝 No conventional commit detected → Default PATCH version bump"
+            BUMP_TYPE="none"
+            CONVENTIONAL_COMMIT_FOUND="false"
+            echo "📝 No conventional commit detected → Will only increment prerelease number"
           fi
           
           echo "BUMP_TYPE=$BUMP_TYPE" >> $GITHUB_OUTPUT
-      
+          echo "CONVENTIONAL_COMMIT_FOUND=$CONVENTIONAL_COMMIT_FOUND" >> $GITHUB_OUTPUT
+
       - name: Auto-increment version
         id: version
         shell: pwsh
@@ -117,6 +124,7 @@ jobs:
           Write-Host "Current version: $currentVersion"
           
           $bumpType = "${{ steps.version-bump.outputs.BUMP_TYPE }}"
+          $conventionalCommitFound = "${{ steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND }}"
           $branchName = "${{ github.ref_name }}"
           
           # Parse version components
@@ -125,18 +133,23 @@ jobs:
           $minor = [int]$versionParts[1]
           $patch = [int]$versionParts[2]
           
-          # Determine new version based on bump type
-          if ($bumpType -eq "major") {
-            $major++
-            $minor = 0
-            $patch = 0
-          }
-          elseif ($bumpType -eq "minor") {
-            $minor++
-            $patch = 0
+          # Only bump base version if conventional commits were found
+          if ($conventionalCommitFound -eq "true") {
+            if ($bumpType -eq "major") {
+              $major++
+              $minor = 0
+              $patch = 0
+            }
+            elseif ($bumpType -eq "minor") {
+              $minor++
+              $patch = 0
+            }
+            elseif ($bumpType -eq "patch") {
+              $patch++
+            }
           }
           else {
-            $patch++
+            Write-Host "ℹ️ No conventional commits found - keeping base version at $major.$minor.$patch"
           }
           
           $baseVersion = "$major.$minor.$patch"
@@ -164,10 +177,23 @@ jobs:
             $tagName = "v$displayVersion"
             $releaseName = "v$displayVersion 🔧 Dev Release"
             $releaseType = "dev"
-            Write-Host "🔧 Dev version: $displayVersion"
+            
+            if ($conventionalCommitFound -eq "true") {
+              Write-Host "🔧 Dev version: $displayVersion ($bumpType bump)"
+            }
+            else {
+              Write-Host "🔧 Dev version: $displayVersion (prerelease increment only)"
+            }
           }
           else {
             # Main branch: production release
+            if ($conventionalCommitFound -eq "false") {
+              Write-Host "⚠️ Warning: No conventional commits found on main branch"
+              Write-Host "Proceeding with patch bump for production release"
+              $patch++
+              $baseVersion = "$major.$minor.$patch"
+            }
+            
             $newVersion = "$baseVersion.0"
             $displayVersion = $baseVersion
             $isPrerelease = "false"
