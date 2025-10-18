@@ -63,8 +63,26 @@ jobs:
         id: version-bump
         shell: bash
         run: |
-          # Get the last tag
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          BRANCH="${{ github.ref_name }}"
+          
+          # Check if this is a merge from dev to main
+          if [ "$BRANCH" == "main" ]; then
+            MERGE_MESSAGE=$(git log -1 --pretty=%B)
+            
+            if echo "$MERGE_MESSAGE" | grep -qiE "Merge pull request.*(from|dev)"; then
+              echo "🔀 Detected dev → main merge, will promote dev version to production"
+              echo "BUMP_TYPE=promotion" >> $GITHUB_OUTPUT
+              echo "CONVENTIONAL_COMMIT_FOUND=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            # For main branch, check against last production tag
+            LAST_TAG=$(git tag -l "v*" --sort=-version:refname | grep -v "-" | head -1 || echo "v0.0.0")
+          else
+            # For dev branch, check against last tag (any type)
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          fi
+          
           echo "Last tag: $LAST_TAG"
           
           # Get commits since last tag
@@ -139,42 +157,57 @@ jobs:
           $minor = [int]$versionParts[1]
           $patch = [int]$versionParts[2]
           
-          # Bump version based on conventional commit type
-          if ($bumpType -eq "major") {
-            $major++
-            $minor = 0
-            $patch = 0
-          }
-          elseif ($bumpType -eq "minor") {
-            $minor++
-            $patch = 0
-          }
-          elseif ($bumpType -eq "patch") {
-            $patch++
-          }
-          
-          $baseVersion = "$major.$minor.$patch"
-          
-          # Determine release type based on branch
-          if ($branchName -eq "dev") {
-            # Dev branch: simple prerelease suffix
-            $newVersion = "$baseVersion.0"
-            $displayVersion = "$baseVersion-dev"
-            $isPrerelease = "true"
-            $tagName = "v$displayVersion"
-            $releaseName = "v$displayVersion 🔧 Dev Release"
-            $releaseType = "dev"
-            Write-Host "🔧 Dev version: $displayVersion ($bumpType bump)"
-          }
-          else {
-            # Main branch: production release
+          # Handle promotion vs normal bump
+          if ($bumpType -eq "promotion") {
+            # Promotion: keep current version, just remove -dev suffix for display
+            Write-Host "🔀 Promoting dev version to production"
+            $baseVersion = "$major.$minor.$patch"
             $newVersion = "$baseVersion.0"
             $displayVersion = $baseVersion
             $isPrerelease = "false"
             $tagName = "v$displayVersion"
             $releaseName = "v$displayVersion Release"
             $releaseType = "production"
-            Write-Host "📦 Production version: $displayVersion ($bumpType bump)"
+            Write-Host "📦 Production version: $displayVersion (promoted from dev)"
+          }
+          else {
+            # Normal bump: increment version based on conventional commit type
+            if ($bumpType -eq "major") {
+              $major++
+              $minor = 0
+              $patch = 0
+            }
+            elseif ($bumpType -eq "minor") {
+              $minor++
+              $patch = 0
+            }
+            elseif ($bumpType -eq "patch") {
+              $patch++
+            }
+            
+            $baseVersion = "$major.$minor.$patch"
+            
+            # Determine release type based on branch
+            if ($branchName -eq "dev") {
+              # Dev branch: add -dev suffix
+              $newVersion = "$baseVersion.0"
+              $displayVersion = "$baseVersion-dev"
+              $isPrerelease = "true"
+              $tagName = "v$displayVersion"
+              $releaseName = "v$displayVersion 🔧 Dev Release"
+              $releaseType = "dev"
+              Write-Host "🔧 Dev version: $displayVersion ($bumpType bump)"
+            }
+            else {
+              # Main branch: production release
+              $newVersion = "$baseVersion.0"
+              $displayVersion = $baseVersion
+              $isPrerelease = "false"
+              $tagName = "v$displayVersion"
+              $releaseName = "v$displayVersion Release"
+              $releaseType = "production"
+              Write-Host "📦 Production version: $displayVersion ($bumpType bump)"
+            }
           }
           
           Write-Host "New version will be: $newVersion (display: $displayVersion)"
@@ -263,6 +296,7 @@ jobs:
           $releaseType = "${{ steps.version.outputs.RELEASE_TYPE }}"
           $displayVersion = "${{ steps.version.outputs.DISPLAY_VERSION }}"
           $currentTag = "${{ steps.version.outputs.TAG_NAME }}"
+          $bumpType = "${{ steps.version-bump.outputs.BUMP_TYPE }}"
           
           # Extract base version (e.g., "1.0.1" from "1.0.1-dev")
           $baseVersion = $displayVersion -replace '-.*$', ''
@@ -386,13 +420,18 @@ jobs:
             $releaseBody += $installation
           }
           else {
-            $emoji = switch ("${{ steps.version-bump.outputs.BUMP_TYPE }}") {
-              "major" { "🚨 Major" }
-              "minor" { "✨ Minor" }
-              default { "🐛 Patch" }
+            if ($bumpType -eq "promotion") {
+              $releaseBody += "## 🚀 Promoted from Dev`n`n"
+            }
+            else {
+              $emoji = switch ($bumpType) {
+                "major" { "🚨 Major" }
+                "minor" { "✨ Minor" }
+                default { "🐛 Patch" }
+              }
+              $releaseBody += "## $emoji Version Bump`n`n"
             }
             
-            $releaseBody += "## $emoji Version Bump`n`n"
             $releaseBody += "**Version:** v$displayVersion`n`n"
             $releaseBody += "**Changes ($tagInfo):**`n"
             $releaseBody += "$commits`n`n"
