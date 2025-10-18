@@ -442,7 +442,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       
-      - name: Create GitHub Release with VSIX -
+      - name: Create GitHub Release with VSIX
         if: steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND == 'true'
         uses: softprops/action-gh-release@v2
         with:
