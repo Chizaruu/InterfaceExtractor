@@ -1,5 +1,9 @@
 name: Pull Request Tests
 
+permissions:
+  contents: read           # Needed for checkout and caching
+  pull-requests: write     # Needed for publishing test results to PR
+
 on:
   pull_request:
     branches:

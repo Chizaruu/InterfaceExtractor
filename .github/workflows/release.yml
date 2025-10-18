@@ -1,5 +1,8 @@
 name: Visual Studio Extension Release
 
+permissions:
+  contents: write  # Needed for creating releases and pushing tags
+
 on:
   push:
     branches:
