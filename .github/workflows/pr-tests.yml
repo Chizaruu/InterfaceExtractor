@@ -2,6 +2,7 @@ name: Pull Request Tests
 
 permissions:
   contents: read           # Needed for checkout and caching
+  checks: write            # Needed for publishing test results as check runs
   pull-requests: write     # Needed for publishing test results to PR
 
 on:
