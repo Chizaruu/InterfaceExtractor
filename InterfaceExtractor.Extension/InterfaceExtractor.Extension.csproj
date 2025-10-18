@@ -57,6 +57,9 @@
     <Compile Include="UI\ExtractInterfaceDialog.xaml.cs">
       <DependentUpon>ExtractInterfaceDialog.xaml</DependentUpon>
     </Compile>
+    <Compile Include="UI\PreviewDialog.xaml.cs">
+      <DependentUpon>PreviewDialog.xaml</DependentUpon>
+    </Compile>
     <Compile Include="UI\OverwriteDialog.xaml.cs">
       <DependentUpon>OverwriteDialog.xaml</DependentUpon>
     </Compile>
@@ -71,6 +74,10 @@
     <Page Include="UI\ExtractInterfaceDialog.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="UI\PreviewDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
     </Page>
     <Page Include="UI\OverwriteDialog.xaml">
       <SubType>Designer</SubType>

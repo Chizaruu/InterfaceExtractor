@@ -20,12 +20,12 @@ namespace InterfaceExtractor.Services
             _options = options ?? new ExtractorOptions();
         }
 
-        public async Task<List<ExtractedClassInfo>> AnalyzeClassesAsync(string filePath)
+        public async Task<List<ExtractedClassInfo>> AnalyzeClassesAsync(string filePath, string projectDirectory = null)
         {
-            return await Task.Run(() => AnalyzeClasses(filePath));
+            return await Task.Run(() => AnalyzeClasses(filePath, projectDirectory));
         }
 
-        private List<ExtractedClassInfo> AnalyzeClasses(string filePath)
+        private List<ExtractedClassInfo> AnalyzeClasses(string filePath, string projectDirectory = null)
         {
             try
             {
@@ -33,13 +33,20 @@ namespace InterfaceExtractor.Services
                 var tree = CSharpSyntaxTree.ParseText(sourceCode);
                 var root = tree.GetRoot();
 
-                // Find all public classes
-                var classDeclarations = root.DescendantNodes()
-                    .OfType<ClassDeclarationSyntax>()
-                    .Where(c => c.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword)))
-                    .ToList();
+                // Find all public (and optionally internal) classes and records
+                var typeDeclarations = new List<TypeDeclarationSyntax>();
 
-                if (!classDeclarations.Any())
+                // Add classes
+                typeDeclarations.AddRange(root.DescendantNodes()
+                    .OfType<ClassDeclarationSyntax>()
+                    .Where(c => IsAccessible(c.Modifiers)));
+
+                // Add records (v1.2.0 feature)
+                typeDeclarations.AddRange(root.DescendantNodes()
+                    .OfType<RecordDeclarationSyntax>()
+                    .Where(r => IsAccessible(r.Modifiers)));
+
+                if (!typeDeclarations.Any())
                 {
                     return new List<ExtractedClassInfo>();
                 }
@@ -53,29 +60,47 @@ namespace InterfaceExtractor.Services
                     .Distinct()
                     .ToList();
 
-                foreach (var classDeclaration in classDeclarations)
+                foreach (var typeDeclaration in typeDeclarations)
                 {
-                    var className = classDeclaration.Identifier.Text;
+                    var typeName = typeDeclaration.Identifier.Text;
+                    var isPartial = typeDeclaration.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword));
+                    var isRecord = typeDeclaration is RecordDeclarationSyntax;
 
                     // Extract namespace
-                    var namespaceDeclaration = classDeclaration.Ancestors()
+                    var namespaceDeclaration = typeDeclaration.Ancestors()
                         .OfType<BaseNamespaceDeclarationSyntax>()
                         .FirstOrDefault();
 
                     var namespaceName = namespaceDeclaration?.Name.ToString() ?? "DefaultNamespace";
 
-                    // Extract public members
-                    var members = ExtractPublicMembers(classDeclaration);
+                    // Extract public members from current file
+                    var members = ExtractPublicMembers(typeDeclaration);
+
+                    // Handle partial classes (v1.2.0 feature)
+                    if (isPartial && _options.AnalyzePartialClasses && !string.IsNullOrEmpty(projectDirectory))
+                    {
+                        var partialMembers = AnalyzePartialClassFiles(
+                            typeName,
+                            namespaceName,
+                            projectDirectory,
+                            filePath);
+
+                        // Merge members, avoiding duplicates
+                        var newMembers = partialMembers.Where(pm => !members.Any(m => m.Signature == pm.Signature));
+                        members.AddRange(newMembers);
+                    }
 
                     if (members.Any())
                     {
                         results.Add(new ExtractedClassInfo
                         {
-                            ClassName = className,
+                            ClassName = typeName,
                             Namespace = namespaceName,
                             Members = members,
                             Usings = usings,
-                            FilePath = filePath
+                            FilePath = filePath,
+                            IsPartial = isPartial,
+                            IsRecord = isRecord
                         });
                     }
                 }
@@ -86,6 +111,85 @@ namespace InterfaceExtractor.Services
             {
                 throw new InvalidOperationException($"Failed to analyze class: {ex.Message}", ex);
             }
+        }
+
+        private bool IsAccessible(SyntaxTokenList modifiers)
+        {
+            var isPublic = modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword));
+            var isInternal = modifiers.Any(m => m.IsKind(SyntaxKind.InternalKeyword));
+
+            if (isPublic)
+                return true;
+
+            // Include internal if option is enabled
+            if (_options.IncludeInternalMembers && isInternal)
+                return true;
+
+            // If no explicit accessibility, it's internal by default for types
+            if (_options.IncludeInternalMembers && !modifiers.Any(m =>
+                m.IsKind(SyntaxKind.PublicKeyword) ||
+                m.IsKind(SyntaxKind.PrivateKeyword) ||
+                m.IsKind(SyntaxKind.ProtectedKeyword) ||
+                m.IsKind(SyntaxKind.InternalKeyword)))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private List<MemberInfo> AnalyzePartialClassFiles(string className, string namespaceName, string projectDirectory, string currentFile)
+        {
+            var additionalMembers = new List<MemberInfo>();
+
+            try
+            {
+                // Search for other .cs files in the project
+                var csFiles = Directory.GetFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
+                    .Where(f => !f.Equals(currentFile, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var file in csFiles)
+                {
+                    try
+                    {
+                        var sourceCode = File.ReadAllText(file);
+                        var tree = CSharpSyntaxTree.ParseText(sourceCode);
+                        var root = tree.GetRoot();
+
+                        // Find partial class/record with matching name and namespace
+                        var partialTypes = root.DescendantNodes()
+                            .OfType<TypeDeclarationSyntax>()
+                            .Where(t => t.Identifier.Text == className &&
+                                       t.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword)) &&
+                                       IsAccessible(t.Modifiers))
+                            .ToList();
+
+                        foreach (var partialType in partialTypes)
+                        {
+                            var ns = partialType.Ancestors()
+                                .OfType<BaseNamespaceDeclarationSyntax>()
+                                .FirstOrDefault()?.Name.ToString() ?? "DefaultNamespace";
+
+                            if (ns == namespaceName)
+                            {
+                                var members = ExtractPublicMembers(partialType);
+                                additionalMembers.AddRange(members);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Skip files that can't be parsed
+                    }
+                }
+            }
+            catch
+            {
+                // If we can't scan for partial files, just continue with what we have
+            }
+
+            return additionalMembers;
         }
 
         public string GenerateInterface(string interfaceName, ExtractedClassInfo classInfo, List<MemberInfo> selectedMembers)
@@ -108,7 +212,7 @@ namespace InterfaceExtractor.Services
             // Calculate target namespace
             var targetNamespace = $"{classInfo.Namespace}{_options.InterfacesNamespaceSuffix}";
 
-            // Filter out usings that match the target namespace (avoid self-referencing)
+            // Filter out usings that match the target namespace
             var filteredUsings = classInfo.Usings
                 .Where(u => !u.Contains($"using {targetNamespace};"))
                 .ToList();
@@ -156,7 +260,7 @@ namespace InterfaceExtractor.Services
             {
                 var member = membersToGenerate[i];
 
-                // Add separator lines between members (except before first)
+                // Add separator lines between members
                 if (i > 0)
                 {
                     for (int j = 0; j < _options.MemberSeparatorLines; j++)
@@ -172,7 +276,7 @@ namespace InterfaceExtractor.Services
                     sb.AppendLine($"        // {GetMemberTypeGroupName(member.Type)}");
                 }
 
-                // Add XML documentation comment if available
+                // Add XML documentation
                 if (!string.IsNullOrWhiteSpace(member.Documentation))
                 {
                     foreach (var line in member.Documentation.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
@@ -201,14 +305,9 @@ namespace InterfaceExtractor.Services
                 else
                 {
                     var needsSemicolon = !member.Signature.TrimEnd().EndsWith("}");
-                    if (needsSemicolon)
-                    {
-                        sb.AppendLine($"        {member.Signature};");
-                    }
-                    else
-                    {
-                        sb.AppendLine($"        {member.Signature}");
-                    }
+                    sb.AppendLine(needsSemicolon
+                        ? $"        {member.Signature};"
+                        : $"        {member.Signature}");
                 }
             }
 
@@ -219,14 +318,175 @@ namespace InterfaceExtractor.Services
             return sb.ToString();
         }
 
-        private List<MemberInfo> ExtractPublicMembers(ClassDeclarationSyntax classDeclaration)
+        public string GenerateImplementationStub(string interfaceName, string className, ExtractedClassInfo classInfo, List<MemberInfo> selectedMembers)
+        {
+            var sb = new StringBuilder();
+
+            // Add file header if enabled
+            if (_options.IncludeFileHeader && !string.IsNullOrWhiteSpace(_options.FileHeaderTemplate))
+            {
+                var header = _options.FileHeaderTemplate
+                    .Replace("{FileName}", $"{className}.cs")
+                    .Replace("{Date}", DateTime.Now.ToString("yyyy-MM-dd"))
+                    .Replace("{Time}", DateTime.Now.ToString("HH:mm:ss"))
+                    .Replace("\\n", "\n");
+
+                sb.AppendLine(header);
+                sb.AppendLine();
+            }
+
+            var targetNamespace = $"{classInfo.Namespace}{_options.InterfacesNamespaceSuffix}";
+
+            // Add usings
+            foreach (var usingDirective in classInfo.Usings)
+            {
+                sb.AppendLine(usingDirective);
+            }
+
+            // Add using for interface namespace if different
+            if (classInfo.Namespace != targetNamespace)
+            {
+                sb.AppendLine($"using {targetNamespace};");
+            }
+
+            if (classInfo.Usings.Any())
+            {
+                sb.AppendLine();
+            }
+
+            // Start namespace
+            sb.AppendLine($"namespace {classInfo.Namespace}");
+            sb.AppendLine("{");
+
+            // Start class
+            sb.AppendLine($"    public class {className} : {interfaceName}");
+            sb.AppendLine("    {");
+
+            // Generate stubs for each member
+            foreach (var member in selectedMembers)
+            {
+                sb.AppendLine();
+
+                // Add XML documentation
+                if (!string.IsNullOrWhiteSpace(member.Documentation))
+                {
+                    foreach (var line in member.Documentation.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var trimmedLine = line.Trim();
+                        if (!string.IsNullOrWhiteSpace(trimmedLine))
+                        {
+                            if (trimmedLine.StartsWith("///"))
+                            {
+                                sb.AppendLine($"        {trimmedLine}");
+                            }
+                            else
+                            {
+                                sb.AppendLine($"        /// {trimmedLine}");
+                            }
+                        }
+                    }
+                }
+
+                switch (member.Type)
+                {
+                    case MemberType.Method:
+                        GenerateMethodStub(sb, member);
+                        break;
+
+                    case MemberType.Property:
+                        GeneratePropertyStub(sb, member);
+                        break;
+
+                    case MemberType.Event:
+                        GenerateEventStub(sb, member);
+                        break;
+
+                    case MemberType.Indexer:
+                        GenerateIndexerStub(sb, member);
+                        break;
+                }
+            }
+
+            // Close class and namespace
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        private static void GenerateMethodStub(StringBuilder sb, MemberInfo member)
+        {
+            if (!string.IsNullOrWhiteSpace(member.Constraints))
+            {
+                sb.AppendLine($"        public {member.Signature}");
+                sb.AppendLine($"            {member.Constraints}");
+            }
+            else
+            {
+                sb.AppendLine($"        public {member.Signature}");
+            }
+
+            sb.AppendLine("        {");
+
+            // Add appropriate return statement or throw NotImplementedException
+            if (member.ReturnType == "Task")
+            {
+                sb.AppendLine($"            return Task.CompletedTask;");
+            }
+            else if (member.ReturnType != "void")
+            {
+                sb.AppendLine($"            throw new System.NotImplementedException();");
+            }
+
+            sb.AppendLine("        }");
+        }
+
+        private static void GeneratePropertyStub(StringBuilder sb, MemberInfo member)
+        {
+            sb.AppendLine($"        public {member.Signature}");
+        }
+
+        private static void GenerateEventStub(StringBuilder sb, MemberInfo member)
+        {
+            sb.AppendLine($"        public {member.Signature};");
+        }
+
+        private static void GenerateIndexerStub(StringBuilder sb, MemberInfo member)
+        {
+            sb.AppendLine($"        public {member.Signature}");
+        }
+
+        private List<MemberInfo> ExtractPublicMembers(TypeDeclarationSyntax typeDeclaration)
         {
             var members = new List<MemberInfo>();
 
-            // Extract public methods
-            var methods = classDeclaration.Members
+            // Extract primary constructor parameters from records (v1.2.0)
+            if (typeDeclaration is RecordDeclarationSyntax recordDeclaration &&
+                recordDeclaration.ParameterList != null)
+            {
+                foreach (var parameter in recordDeclaration.ParameterList.Parameters)
+                {
+                    var paramType = parameter.Type.ToString();
+                    var paramName = parameter.Identifier.Text;
+
+                    // Extract documentation from parameter if available
+                    var documentation = ExtractDocumentation(parameter);
+
+                    members.Add(new MemberInfo
+                    {
+                        Type = MemberType.Property,
+                        Signature = $"{paramType} {paramName} {{ get; }}",
+                        Name = paramName,
+                        ReturnType = paramType,
+                        Documentation = documentation
+                    });
+                }
+            }
+
+            // Extract methods
+            var methods = typeDeclaration.Members
                 .OfType<MethodDeclarationSyntax>()
-                .Where(m => m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                .Where(m => IsAccessible(m.Modifiers) &&
                            !m.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
 
             foreach (var method in methods)
@@ -249,10 +509,10 @@ namespace InterfaceExtractor.Services
                 });
             }
 
-            // Extract public properties
-            var properties = classDeclaration.Members
+            // Extract properties
+            var properties = typeDeclaration.Members
                 .OfType<PropertyDeclarationSyntax>()
-                .Where(p => p.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                .Where(p => IsAccessible(p.Modifiers) &&
                            !p.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
 
             foreach (var property in properties)
@@ -266,7 +526,13 @@ namespace InterfaceExtractor.Services
                 {
                     accessors = property.AccessorList.Accessors
                         .Where(accessor => !accessor.Modifiers.Any(m => m.IsKind(SyntaxKind.PrivateKeyword)))
-                        .Select(accessor => accessor.Keyword.Text)
+                        .Select(accessor =>
+                        {
+                            var keyword = accessor.Keyword.Text;
+                            // Convert 'init' to 'get' for interface (init not valid in interfaces)
+                            return keyword == "init" ? "get" : keyword;
+                        })
+                        .Distinct() // Remove duplicates if both get and init exist
                         .ToList();
                 }
                 else if (property.ExpressionBody != null)
@@ -288,10 +554,10 @@ namespace InterfaceExtractor.Services
                 });
             }
 
-            // Extract public events
-            var events = classDeclaration.Members
+            // Extract events
+            var events = typeDeclaration.Members
                 .OfType<EventFieldDeclarationSyntax>()
-                .Where(e => e.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                .Where(e => IsAccessible(e.Modifiers) &&
                            !e.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
 
             foreach (var eventField in events)
@@ -314,10 +580,10 @@ namespace InterfaceExtractor.Services
                 }
             }
 
-            // Extract public indexers
-            var indexers = classDeclaration.Members
+            // Extract indexers
+            var indexers = typeDeclaration.Members
                 .OfType<IndexerDeclarationSyntax>()
-                .Where(i => i.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)) &&
+                .Where(i => IsAccessible(i.Modifiers) &&
                            !i.Modifiers.Any(mod => mod.IsKind(SyntaxKind.StaticKeyword)));
 
             foreach (var indexer in indexers)
@@ -349,12 +615,12 @@ namespace InterfaceExtractor.Services
                 });
             }
 
-            // Extract operator overloads (if enabled in options)
+            // Extract operator overloads (if enabled)
             if (_options.IncludeOperatorOverloads)
             {
-                var operators = classDeclaration.Members
+                var operators = typeDeclaration.Members
                     .OfType<OperatorDeclarationSyntax>()
-                    .Where(o => o.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)));
+                    .Where(o => IsAccessible(o.Modifiers));
 
                 foreach (var op in operators)
                 {
@@ -374,9 +640,9 @@ namespace InterfaceExtractor.Services
                 }
 
                 // Extract conversion operators
-                var conversions = classDeclaration.Members
+                var conversions = typeDeclaration.Members
                     .OfType<ConversionOperatorDeclarationSyntax>()
-                    .Where(c => c.Modifiers.Any(mod => mod.IsKind(SyntaxKind.PublicKeyword)));
+                    .Where(c => IsAccessible(c.Modifiers));
 
                 foreach (var conversion in conversions)
                 {
@@ -399,40 +665,52 @@ namespace InterfaceExtractor.Services
             return members;
         }
 
+        private static string ExtractDocumentation(ParameterSyntax parameter)
+        {
+            var trivia = parameter.GetLeadingTrivia()
+                .FirstOrDefault(t => t.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) ||
+                                    t.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia));
+
+            return trivia != default ? trivia.ToString().Trim() : string.Empty;
+        }
+
         private static string ExtractDocumentation(MemberDeclarationSyntax member)
         {
             var trivia = member.GetLeadingTrivia()
                 .FirstOrDefault(t => t.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) ||
                                     t.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia));
 
-            if (trivia != default)
-            {
-                return trivia.ToString().Trim();
-            }
-
-            return string.Empty;
+            return trivia != default ? trivia.ToString().Trim() : string.Empty;
         }
 
         public string AppendInterfaceToClass(string sourceCode, string className, string interfaceName, string interfaceNamespace)
         {
             if (!_options.AutoUpdateClass)
             {
-                return sourceCode; // Don't update if disabled
+                return sourceCode;
             }
 
             var tree = CSharpSyntaxTree.ParseText(sourceCode);
             var root = (CompilationUnitSyntax)tree.GetRoot();
 
-            var classDeclaration = root.DescendantNodes()
+            // Find class or record
+            TypeDeclarationSyntax typeDeclaration = root.DescendantNodes()
                 .OfType<ClassDeclarationSyntax>()
                 .FirstOrDefault(c => c.Identifier.Text == className);
 
-            if (classDeclaration == null)
+            if (typeDeclaration == null)
+            {
+                typeDeclaration = root.DescendantNodes()
+                    .OfType<RecordDeclarationSyntax>()
+                    .FirstOrDefault(r => r.Identifier.Text == className);
+            }
+
+            if (typeDeclaration == null)
             {
                 return sourceCode;
             }
 
-            var classNamespace = classDeclaration.Ancestors()
+            var classNamespace = typeDeclaration.Ancestors()
                 .OfType<BaseNamespaceDeclarationSyntax>()
                 .FirstOrDefault();
 
@@ -444,23 +722,20 @@ namespace InterfaceExtractor.Services
 
             if (sameNamespace)
             {
-                // Same namespace, use simple name
                 interfaceToAdd = interfaceName;
             }
             else if (_options.AddUsingDirective)
             {
-                // Different namespace but adding using directive, use simple name
                 interfaceToAdd = interfaceName;
             }
             else
             {
-                // Different namespace and not adding using, use fully qualified name
                 interfaceToAdd = $"{interfaceNamespace}.{interfaceName}";
             }
 
-            if (classDeclaration.BaseList != null)
+            if (typeDeclaration.BaseList != null)
             {
-                var existingBases = classDeclaration.BaseList.Types
+                var existingBases = typeDeclaration.BaseList.Types
                     .Select(t => t.ToString())
                     .ToList();
 
@@ -470,9 +745,9 @@ namespace InterfaceExtractor.Services
                 }
             }
 
-            ClassDeclarationSyntax newClassDeclaration;
+            TypeDeclarationSyntax newTypeDeclaration;
 
-            if (classDeclaration.BaseList == null)
+            if (typeDeclaration.BaseList == null)
             {
                 var baseType = SyntaxFactory.SimpleBaseType(
                     SyntaxFactory.ParseTypeName(interfaceToAdd));
@@ -480,18 +755,18 @@ namespace InterfaceExtractor.Services
                 var baseList = SyntaxFactory.BaseList(
                     SyntaxFactory.SingletonSeparatedList<BaseTypeSyntax>(baseType));
 
-                newClassDeclaration = classDeclaration.WithBaseList(baseList);
+                newTypeDeclaration = typeDeclaration.WithBaseList(baseList);
             }
             else
             {
                 var baseType = SyntaxFactory.SimpleBaseType(
                     SyntaxFactory.ParseTypeName(interfaceToAdd));
 
-                var newBaseList = classDeclaration.BaseList.AddTypes(baseType);
-                newClassDeclaration = classDeclaration.WithBaseList(newBaseList);
+                var newBaseList = typeDeclaration.BaseList.AddTypes(baseType);
+                newTypeDeclaration = typeDeclaration.WithBaseList(newBaseList);
             }
 
-            var newRoot = root.ReplaceNode(classDeclaration, newClassDeclaration);
+            var newRoot = root.ReplaceNode(typeDeclaration, newTypeDeclaration);
 
             if (_options.AddUsingDirective &&
                 !sameNamespace &&
@@ -517,23 +792,12 @@ namespace InterfaceExtractor.Services
         {
             switch (type)
             {
-                case MemberType.Property:
-                    return 1;
-
-                case MemberType.Method:
-                    return 2;
-
-                case MemberType.Event:
-                    return 3;
-
-                case MemberType.Indexer:
-                    return 4;
-
-                case MemberType.Operator:
-                    return 5;
-
-                default:
-                    return 99;
+                case MemberType.Property: return 1;
+                case MemberType.Method: return 2;
+                case MemberType.Event: return 3;
+                case MemberType.Indexer: return 4;
+                case MemberType.Operator: return 5;
+                default: return 99;
             }
         }
 
@@ -541,23 +805,12 @@ namespace InterfaceExtractor.Services
         {
             switch (type)
             {
-                case MemberType.Property:
-                    return "Properties";
-
-                case MemberType.Method:
-                    return "Methods";
-
-                case MemberType.Event:
-                    return "Events";
-
-                case MemberType.Indexer:
-                    return "Indexers";
-
-                case MemberType.Operator:
-                    return "Operators";
-
-                default:
-                    return "Members";
+                case MemberType.Property: return "Properties";
+                case MemberType.Method: return "Methods";
+                case MemberType.Event: return "Events";
+                case MemberType.Indexer: return "Indexers";
+                case MemberType.Operator: return "Operators";
+                default: return "Members";
             }
         }
     }
@@ -569,6 +822,8 @@ namespace InterfaceExtractor.Services
         public List<MemberInfo> Members { get; set; }
         public List<string> Usings { get; set; }
         public string FilePath { get; set; }
+        public bool IsPartial { get; set; }
+        public bool IsRecord { get; set; }
     }
 
     public class MemberInfo
