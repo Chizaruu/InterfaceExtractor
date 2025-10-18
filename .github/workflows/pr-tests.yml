@@ -18,10 +18,6 @@ on:
       - '**.vsct'
       - '**.vsixmanifest'
       - '.github/workflows/pr-tests.yml'
-    paths-ignore:
-      - '.github/workflows/release.yml'
-      - 'README.md'
-      - 'docs/**'
 
 # Cancel in-progress runs when new commits are pushed
 concurrency:
