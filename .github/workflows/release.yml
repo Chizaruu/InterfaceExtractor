@@ -308,96 +308,92 @@ jobs:
           # Find the last tag of the same type (excluding current tag)
           if ($releaseType -eq "dev") {
             # Get last dev tag (excluding current)
-            $lastTag = git tag -l "v*-dev" --sort=-version:refname | Where-Object { $_ -ne $currentTag } | Select-Object -First 1
+            $lastTag = git tag -l "v*-dev*" --sort=-version:refname | Where-Object { $_ -ne $currentTag } | Select-Object -First 1
           }
           else {
             # Production releases: exclude current tag and any prerelease tags
             $lastTag = git tag -l "v*" --sort=-version:refname | Where-Object { $_ -notmatch "-" -and $_ -ne $currentTag } | Select-Object -First 1
           }
           
-          # Get tag info and commit SHA
+          Write-Host "Current tag: $currentTag"
+          Write-Host "Last tag: $lastTag"
+          
+          # Get commits using git log first (more reliable for commit ranges)
+          $commits = ""
           if ([string]::IsNullOrEmpty($lastTag)) {
+            Write-Host "No previous tag found - using all commits"
             $tagInfo = "First $releaseType release"
-            $lastCommitSha = ""
-            $sinceParam = ""
+            $gitCommits = git log --first-parent --pretty=format:"%H||%s" --reverse --grep="^chore: bump version" --invert-grep
           }
           else {
+            Write-Host "Getting commits between $lastTag and HEAD"
             $tagInfo = "Since $lastTag"
-            $lastCommitSha = git rev-list -n 1 $lastTag
-            
-            # Get the commit date for the 'since' parameter to optimize API call
-            $lastCommitDate = git log -1 --format=%cI $lastTag
-            $sinceParam = "&since=$lastCommitDate"
+            $gitCommits = git log --first-parent "$lastTag..HEAD" --pretty=format:"%H||%s" --reverse --grep="^chore: bump version" --invert-grep
           }
           
-          # Get commits with GitHub usernames using GitHub API
-          $commits = ""
+          # Try to enrich with GitHub usernames via API
+          $commitList = @()
           try {
-            Write-Host "Fetching commits from GitHub API..."
+            Write-Host "Enriching commits with GitHub usernames..."
             
-            $apiResponse = gh api --paginate "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=100$sinceParam" --jq '.[] | "\(.commit.message | split("\n")[0])||\(.author.login // "unknown")||\(.sha)"' 2>&1
-            
-            # Check if gh command actually failed (non-zero exit code)
-            if ($LASTEXITCODE -ne 0) {
-              throw "gh api command failed with exit code $LASTEXITCODE"
+            # Build SHA list for lookup
+            $shaMap = @{}
+            foreach ($line in $gitCommits) {
+              if ([string]::IsNullOrEmpty($line)) { continue }
+              
+              $parts = $line -split '\|\|'
+              if ($parts.Count -lt 2) { continue }
+              
+              $sha = $parts[0]
+              $message = $parts[1]
+              $shaMap[$sha] = $message
             }
             
-            # Process response even if empty
-            $commitList = @()
-            if ($apiResponse) {
-              foreach ($line in $apiResponse) {
-                # Skip error messages that might have been captured
-                if ($line -match '^\s*$' -or $line -like '*error*' -or $line -like '*warning*') {
-                  continue
+            if ($shaMap.Count -eq 0) {
+              throw "No commits to process"
+            }
+            
+            Write-Host "Found $($shaMap.Count) commits to enrich"
+            
+            # Fetch commit details from GitHub API (in batches if needed)
+            foreach ($sha in $shaMap.Keys) {
+              try {
+                $apiResponse = gh api "repos/${{ github.repository }}/commits/$sha" --jq '"\(.author.login // "unknown")"' 2>$null
+                
+                if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrEmpty($apiResponse)) {
+                  $author = $apiResponse.Trim()
+                  $message = $shaMap[$sha]
+                  $shortSha = $sha.Substring(0, 7)
+                  $commitList += "- $message by @$author ($shortSha)"
                 }
-                
-                $parts = $line -split '\|\|'
-                if ($parts.Count -lt 3) {
-                  continue
+                else {
+                  # Fallback to without username
+                  $message = $shaMap[$sha]
+                  $shortSha = $sha.Substring(0, 7)
+                  $commitList += "- $message ($shortSha)"
                 }
-                
-                $message = $parts[0]
-                $author = $parts[1]
-                $sha = $parts[2]
-                
-                # Skip the version bump commit itself
-                if ($message -match '^\s*chore:\s*bump version') {
-                  continue
-                }
-                
-                if (![string]::IsNullOrEmpty($lastCommitSha) -and $sha -eq $lastCommitSha) {
-                  break
-                }
-                
-                # Use short SHA (7 chars) for display only
+              }
+              catch {
+                # Fallback to without username
+                $message = $shaMap[$sha]
                 $shortSha = $sha.Substring(0, 7)
-                $commitList += "- $message by @$author ($shortSha)"
+                $commitList += "- $message ($shortSha)"
               }
             }
             
-            if ($commitList.Count -gt 0) {
-              $commits = $commitList -join "`n"
-              Write-Host "✅ Successfully fetched $($commitList.Count) commits with GitHub usernames"
-            }
-            else {
-              Write-Host "⚠️ No commits returned from GitHub API, falling back to git log..."
-              throw "No commits in API response"
-            }
+            $commits = $commitList -join "`n"
+            Write-Host "✅ Successfully processed $($commitList.Count) commits"
           }
           catch {
-            Write-Host "⚠️ GitHub API fetch issue: $_"
-            Write-Host "Falling back to git log..."
+            Write-Host "⚠️ Could not enrich with GitHub usernames: $_"
+            Write-Host "Using plain git log format"
             
-            # Fallback to simple git log
+            # Fallback to simple git log format
             if ([string]::IsNullOrEmpty($lastTag)) {
               $commits = git log --first-parent --pretty=format:"- %s (%h)" --reverse --grep="^chore: bump version" --invert-grep
             }
             else {
               $commits = git log --first-parent "$lastTag..HEAD" --pretty=format:"- %s (%h)" --reverse --grep="^chore: bump version" --invert-grep
-            }
-            
-            if (![string]::IsNullOrEmpty($commits)) {
-              Write-Host "✅ Successfully fetched commits using git log"
             }
           }
           
@@ -406,7 +402,7 @@ jobs:
             $commits = "- Initial release"
           }
           
-          # Build installation instructions (fixed newlines)
+          # Build installation instructions
           $installation = "## Installation`n`n"
           $installation += "1. Download the ``.vsix`` file below`n"
           $installation += "2. Double-click to install in Visual Studio`n"
