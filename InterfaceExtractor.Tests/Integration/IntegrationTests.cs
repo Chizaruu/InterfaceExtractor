@@ -204,18 +204,10 @@ namespace InterfaceExtractor.Tests.Integration
         }
 
         [Fact]
-        public async Task CompleteFlow_AppendInterface_UpdatesClassAsync()
+        public void CompleteFlow_AppendInterface_UpdatesClassAsync()
         {
             // Arrange
             var sourceCode = TestHelpers.SampleCode.SimpleClass;
-            var filePath = TestHelpers.CreateTempCSharpFile(sourceCode, _tempDirectory);
-
-            // Act - Analyze and generate
-            var classInfos = await _service.AnalyzeClassesAsync(filePath);
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
-                "ISimpleClass",
-                classInfos[0],
-                classInfos[0].Members);
 
             // Act - Append interface to class
             var updatedCode = InterfaceExtractorService.AppendInterfaceToClass(
