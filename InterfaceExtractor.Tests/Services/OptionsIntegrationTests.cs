@@ -65,15 +65,14 @@ namespace InterfaceExtractor.Tests.Services
         public void ExtractorOptions_CanModifySettings()
         {
             // Arrange
-            var options = new ExtractorOptions
-            {
-                // Act
-                InterfacesFolderName = "Contracts",
-                InterfacePrefix = "X",
-                InterfacesNamespaceSuffix = ".Contracts",
-                AutoUpdateClass = false,
-                IncludeOperatorOverloads = true
-            };
+            var options = new ExtractorOptions();
+
+            // Act
+            options.InterfacesFolderName = "Contracts";
+            options.InterfacePrefix = "X";
+            options.InterfacesNamespaceSuffix = ".Contracts";
+            options.AutoUpdateClass = false;
+            options.IncludeOperatorOverloads = true;
 
             // Assert
             options.InterfacesFolderName.Should().Be("Contracts");
@@ -220,6 +219,44 @@ namespace Test
             result.Should().Contain("public class TestClass : ITestClass");
             result.Should().NotContain("Test.Interfaces.ITestClass");
             result.Should().Contain("using Test.Interfaces;");
+        }
+
+        [Fact]
+        public void Service_FiltersOutSelfReferencingUsings()
+        {
+            // Arrange
+            var service = new InterfaceExtractorService();
+
+            var classInfo = new ExtractedClassInfo
+            {
+                ClassName = "TestClass",
+                Namespace = "MyApp.Data",
+                Usings =
+                [
+                    "using System;",
+                    "using MyApp.Models;",
+                    "using MyApp.Data.Interfaces;" // This should be filtered out!
+                ],
+                Members =
+                [
+                    new MemberInfo
+                    {
+                        Type = MemberType.Property,
+                        Signature = "string Name { get; set; }",
+                        Name = "Name"
+                    }
+                ]
+            };
+
+            // Act
+            var interfaceCode = service.GenerateInterface("ITestClass", classInfo, classInfo.Members);
+
+            // Assert - Should NOT include the self-referencing using
+            interfaceCode.Should().Contain("using System;");
+            interfaceCode.Should().Contain("using MyApp.Models;");
+            interfaceCode.Should().NotContain("using MyApp.Data.Interfaces;",
+                "interface should not include using statement for its own namespace");
+            interfaceCode.Should().Contain("namespace MyApp.Data.Interfaces");
         }
 
         #endregion Options Tests

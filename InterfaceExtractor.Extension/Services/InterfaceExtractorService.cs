@@ -105,13 +105,21 @@ namespace InterfaceExtractor.Services
                 sb.AppendLine();
             }
 
-            // Add usings
-            foreach (var usingDirective in classInfo.Usings)
+            // Calculate target namespace
+            var targetNamespace = $"{classInfo.Namespace}{_options.InterfacesNamespaceSuffix}";
+
+            // Filter out usings that match the target namespace (avoid self-referencing)
+            var filteredUsings = classInfo.Usings
+                .Where(u => !u.Contains($"using {targetNamespace};"))
+                .ToList();
+
+            // Add filtered usings
+            foreach (var usingDirective in filteredUsings)
             {
                 sb.AppendLine(usingDirective);
             }
 
-            if (classInfo.Usings.Any())
+            if (filteredUsings.Any())
             {
                 sb.AppendLine();
             }
