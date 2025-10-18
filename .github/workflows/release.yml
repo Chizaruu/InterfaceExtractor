@@ -142,31 +142,7 @@ jobs:
           $baseVersion = "$major.$minor.$patch"
           
           # Determine prerelease type based on branch
-          if ($branchName -like "*testing*") {
-            # Testing branches: find the next testing prerelease number
-            $lastTestingTag = git tag -l "v$baseVersion-testing.*" --sort=-version:refname | Select-Object -First 1
-            
-            if ([string]::IsNullOrEmpty($lastTestingTag)) {
-              $prereleaseNum = 0
-            }
-            elseif ($lastTestingTag -match 'testing\.(\d+)') {
-              $prereleaseNum = [int]$matches[1] + 1
-            }
-            else {
-              Write-Host "⚠️ Warning: Could not parse testing tag '$lastTestingTag', starting from 0"
-              $prereleaseNum = 0
-            }
-            
-            $prereleaseNum = $prereleaseNum.ToString("00")
-            $newVersion = "$baseVersion.$prereleaseNum"
-            $displayVersion = "$baseVersion-testing.$prereleaseNum"
-            $isPrerelease = "true"
-            $tagName = "v$displayVersion"
-            $releaseName = "v$displayVersion 🧪 Testing Release"
-            $releaseType = "testing"
-            Write-Host "🧪 Testing version: $displayVersion"
-          }
-          elseif ($branchName -eq "dev") {
+          if ($branchName -eq "dev") {
             # Dev branch: find the next dev prerelease number
             $lastDevTag = git tag -l "v$baseVersion-dev.*" --sort=-version:refname | Select-Object -First 1
             
@@ -286,15 +262,7 @@ jobs:
           $baseVersion = $displayVersion -replace '-.*$', ''
           
           # Find the last tag of the same type and base version
-          if ($releaseType -eq "testing") {
-            $lastTag = git tag -l "v$baseVersion-testing.*" --sort=-version:refname | Select-Object -Skip 1 -First 1
-            
-            # If no previous tag with same base version, find last testing tag of any version
-            if ([string]::IsNullOrEmpty($lastTag)) {
-              $lastTag = git tag -l "v*-testing.*" --sort=-version:refname | Select-Object -First 1
-            }
-          }
-          elseif ($releaseType -eq "dev") {
+          if ($releaseType -eq "dev") {
             $lastTag = git tag -l "v$baseVersion-dev.*" --sort=-version:refname | Select-Object -Skip 1 -First 1
             
             # If no previous tag with same base version, find last dev tag of any version
