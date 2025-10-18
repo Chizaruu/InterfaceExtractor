@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="InterfaceExtractor.6fa7b9f2-c586-4bd2-8735-939937fa55d6" Version="1.1.4.01" Language="en-US" Publisher="Chizaruu" />
+    <Identity Id="InterfaceExtractor.6fa7b9f2-c586-4bd2-8735-939937fa55d6" Version="1.2.0.0" Language="en-US" Publisher="Chizaruu" />
     <DisplayName>Interface Extractor</DisplayName>
     <Description xml:space="preserve">Extract interfaces from C# files directly from Solution Explorer. Right-click any C# file to automatically generate interface files with all public methods and properties.</Description>
     <Tags>interface, extract, refactor, C#, productivity</Tags>
