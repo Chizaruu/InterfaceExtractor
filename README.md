@@ -246,7 +246,7 @@ public interface IPerson
 }
 ```
 
-**Note:** `init` accessors are converted to `get` only in interfaces, since `init` is not valid in interface declarations.
+**Note:** `init` accessors are converted to `get` for broader compatibility. While `init` is valid in C# 9+ interface declarations, implementing types must also use `init` accessors, which may not always be desirable.
 
 ### Partial Classes
 
