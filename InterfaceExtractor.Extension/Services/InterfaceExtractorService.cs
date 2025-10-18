@@ -117,9 +117,21 @@ namespace InterfaceExtractor.Services
                 // Add XML documentation comment if available
                 if (!string.IsNullOrWhiteSpace(member.Documentation))
                 {
-                    foreach (var line in member.Documentation.Split('\n'))
+                    foreach (var line in member.Documentation.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                     {
-                        sb.AppendLine($"        {line.TrimEnd()}");
+                        var trimmedLine = line.Trim();
+                        if (!string.IsNullOrWhiteSpace(trimmedLine))
+                        {
+                            // Ensure the line starts with ///
+                            if (trimmedLine.StartsWith("///"))
+                            {
+                                sb.AppendLine($"        {trimmedLine}");
+                            }
+                            else
+                            {
+                                sb.AppendLine($"        /// {trimmedLine}");
+                            }
+                        }
                     }
                 }
 
@@ -131,7 +143,18 @@ namespace InterfaceExtractor.Services
                 }
                 else
                 {
-                    sb.AppendLine($"        {member.Signature};");
+                    // Only add semicolon if the signature doesn't end with }
+                    // Properties/indexers with accessor blocks end with }, methods/events don't
+                    var needsSemicolon = !member.Signature.TrimEnd().EndsWith("}");
+
+                    if (needsSemicolon)
+                    {
+                        sb.AppendLine($"        {member.Signature};");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"        {member.Signature}");
+                    }
                 }
             }
 
@@ -389,7 +412,8 @@ namespace InterfaceExtractor.Services
                 }
             }
 
-            return newRoot.ToFullString();
+            // Add NormalizeWhitespace() to properly format the output
+            return newRoot.NormalizeWhitespace().ToFullString();
         }
     }
 
