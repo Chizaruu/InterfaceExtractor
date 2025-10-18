@@ -279,16 +279,22 @@ jobs:
           if ([string]::IsNullOrEmpty($lastTag)) {
             $tagInfo = "First $releaseType release"
             $lastCommitSha = ""
+            $sinceParam = ""
           }
           else {
             $tagInfo = "Since $lastTag"
             $lastCommitSha = git rev-list -n 1 $lastTag
+            
+            # Get the commit date for the 'since' parameter to optimize API call
+            $lastCommitDate = git log -1 --format=%cI $lastTag
+            $sinceParam = "&since=$lastCommitDate"
           }
           
           # Get commits with GitHub usernames using GitHub API
           try {
             Write-Host "Fetching commits from GitHub API..."
-            $apiResponse = gh api --paginate "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=100" --jq '.[] | "\(.commit.message | split("\n")[0])||\(.author.login // "unknown")||\(.sha[0:7])"'
+            
+            $apiResponse = gh api --paginate "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=100$sinceParam" --jq '.[] | "\(.commit.message | split("\n")[0])||\(.author.login // "unknown")||\(.sha)"'
             
             # Check if gh command succeeded
             if ($LASTEXITCODE -ne 0 -or -not $apiResponse) {
@@ -302,12 +308,13 @@ jobs:
               $author = $parts[1]
               $sha = $parts[2]
               
-              # Stop if we've reached the last tag
-              if (![string]::IsNullOrEmpty($lastCommitSha) -and $lastCommitSha.Length -ge 7 -and $sha -eq $lastCommitSha.Substring(0, 7)) {
+              if (![string]::IsNullOrEmpty($lastCommitSha) -and $sha -eq $lastCommitSha) {
                 break
               }
               
-              $commitList += "- $message by @$author ($sha)"
+              # Use short SHA (7 chars) for display only
+              $shortSha = $sha.Substring(0, 7)
+              $commitList += "- $message by @$author ($shortSha)"
             }
             
             $commits = $commitList -join "`n"
@@ -362,7 +369,7 @@ jobs:
             $releaseBody += $installation
           }
           
-          $releaseBody | Out-File -FilePath release-notes.txt -Encoding utf8 -NoNewline
+          $releaseBody | Out-File -FilePath release-notes.txt -Encoding utf8
         env:
           GH_TOKEN: ${{ github.token }}
       
