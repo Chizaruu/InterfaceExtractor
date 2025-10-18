@@ -68,8 +68,8 @@ namespace InterfaceExtractor.Tests.Integration
             classInfos[0].Namespace.Should().Be("TestNamespace");
             classInfos[0].Members.Should().HaveCount(3); // Name, Age, DoSomething
 
-            // Act - Generate
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            // Act - Generate (using instance method)
+            var interfaceCode = _service.GenerateInterface(
                 "ISimpleClass",
                 classInfos[0],
                 classInfos[0].Members);
@@ -92,7 +92,7 @@ namespace InterfaceExtractor.Tests.Integration
 
             // Act
             var classInfos = await _service.AnalyzeClassesAsync(filePath);
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "IDocumentedClass",
                 classInfos[0],
                 classInfos[0].Members);
@@ -115,7 +115,7 @@ namespace InterfaceExtractor.Tests.Integration
 
             // Act
             var classInfos = await _service.AnalyzeClassesAsync(filePath);
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "IGenericRepository",
                 classInfos[0],
                 classInfos[0].Members);
@@ -209,8 +209,8 @@ namespace InterfaceExtractor.Tests.Integration
             // Arrange
             var sourceCode = TestHelpers.SampleCode.SimpleClass;
 
-            // Act - Append interface to class
-            var updatedCode = InterfaceExtractorService.AppendInterfaceToClass(
+            // Act - Append interface to class (using instance method)
+            var updatedCode = _service.AppendInterfaceToClass(
                 sourceCode,
                 "SimpleClass",
                 "ISimpleClass",
@@ -237,7 +237,7 @@ namespace InterfaceExtractor.Tests.Integration
                 .Where(m => m.Name == "Name")
                 .ToList();
 
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "ISimpleClass",
                 classInfos[0],
                 selectedMembers);
@@ -305,7 +305,7 @@ namespace InterfaceExtractor.Tests.Integration
 
             // Act
             var classInfos = await _service.AnalyzeClassesAsync(filePath);
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "ISimpleClass",
                 classInfos[0],
                 classInfos[0].Members);

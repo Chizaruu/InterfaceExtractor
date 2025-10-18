@@ -1,4 +1,5 @@
 ﻿using Microsoft.CodeAnalysis.CSharp;
+using InterfaceExtractor.Options;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -7,15 +8,19 @@ namespace InterfaceExtractor.UI
 {
     public partial class ExtractInterfaceDialog : Window
     {
+        private readonly ExtractorOptions options;
+
         public string InterfaceName { get; private set; }
         public List<MemberSelectionItem> Members { get; private set; }
 
-        public ExtractInterfaceDialog(string className, List<MemberSelectionItem> members)
+        public ExtractInterfaceDialog(string className, List<MemberSelectionItem> members, ExtractorOptions options = null)
         {
             InitializeComponent();
 
+            this.options = options ?? new ExtractorOptions();
+
             ClassNameText.Text = className;
-            InterfaceNameTextBox.Text = $"{Constants.InterfacePrefix}{className}";
+            InterfaceNameTextBox.Text = $"{this.options.InterfacePrefix}{className}";
             Members = members;
 
             MembersListBox.ItemsSource = Members;
@@ -26,10 +31,9 @@ namespace InterfaceExtractor.UI
                 member.IsSelected = true;
             }
 
-            // Update select all checkbox state
             UpdateSelectAllCheckBox();
 
-            // Subscribe to property changes to update select all checkbox
+            // Subscribe to property changes
             foreach (var member in Members)
             {
                 member.PropertyChanged += (s, e) =>
@@ -59,7 +63,7 @@ namespace InterfaceExtractor.UI
             }
             else
             {
-                SelectAllCheckBox.IsChecked = null; // Indeterminate state
+                SelectAllCheckBox.IsChecked = null;
             }
         }
 
@@ -106,11 +110,13 @@ namespace InterfaceExtractor.UI
                 return;
             }
 
-            // Warn if doesn't start with 'I'
-            if (!InterfaceName.StartsWith(Constants.InterfacePrefix) || InterfaceName.Length < 2)
+            // Warn if doesn't start with prefix (respecting options)
+            if (options.WarnIfNoIPrefix &&
+                !string.IsNullOrEmpty(options.InterfacePrefix) &&
+                (!InterfaceName.StartsWith(options.InterfacePrefix) || InterfaceName.Length < options.InterfacePrefix.Length + 1))
             {
                 var result = MessageBox.Show(
-                    $"Interface names typically start with '{Constants.InterfacePrefix}'. Do you want to continue?",
+                    $"Interface names typically start with '{options.InterfacePrefix}'. Do you want to continue?",
                     Constants.ExtensionName,
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question);
@@ -162,7 +168,6 @@ namespace InterfaceExtractor.UI
 
         private void SelectAllCheckBox_Changed(object sender, RoutedEventArgs e)
         {
-            // Prevent recursion
             if (SelectAllCheckBox.IsChecked == null)
                 return;
 

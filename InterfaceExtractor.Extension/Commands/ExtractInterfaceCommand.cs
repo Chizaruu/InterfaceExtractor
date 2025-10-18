@@ -2,6 +2,7 @@
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using InterfaceExtractor.Options;
 using System;
 using System.ComponentModel.Design;
 using System.IO;
@@ -18,6 +19,7 @@ namespace InterfaceExtractor.Commands
         private readonly AsyncPackage package;
         private readonly Services.InterfaceExtractorService extractorService;
         private readonly DTE2 dte;
+        private readonly ExtractorOptions options;
         private IVsOutputWindowPane outputPane;
 
         private ExtractInterfaceCommand(AsyncPackage package, OleMenuCommandService commandService, DTE2 dte)
@@ -26,7 +28,9 @@ namespace InterfaceExtractor.Commands
             this.dte = dte ?? throw new ArgumentNullException(nameof(dte));
             commandService = commandService ?? throw new ArgumentNullException(nameof(commandService));
 
-            extractorService = new Services.InterfaceExtractorService();
+            // Get options from the package
+            options = OptionsProvider.GetOptions(package);
+            extractorService = new Services.InterfaceExtractorService(options);
 
             var menuCommandID = new CommandID(CommandSet, CommandId);
             var menuItem = new OleMenuCommand(this.Execute, menuCommandID);
@@ -40,13 +44,11 @@ namespace InterfaceExtractor.Commands
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
 
-            // Get services asynchronously
             var commandService = await package.GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
             var dte = await package.GetServiceAsync(typeof(DTE)) as DTE2;
 
             Instance = new ExtractInterfaceCommand(package, commandService, dte);
 
-            // Initialize output pane
             await Instance.InitializeOutputPaneAsync();
         }
 
@@ -73,7 +75,6 @@ namespace InterfaceExtractor.Commands
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            // Pattern matching (C# 7.3 compatible)
             if (!(sender is OleMenuCommand command)) return;
 
             command.Visible = false;
@@ -98,7 +99,6 @@ namespace InterfaceExtractor.Commands
 
         private void Execute(object sender, EventArgs e)
         {
-            // Use the package's JoinableTaskFactory for proper async execution
             this.package.JoinableTaskFactory.RunAsync(async () =>
             {
                 try
@@ -120,6 +120,8 @@ namespace InterfaceExtractor.Commands
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
             LogMessage("Starting interface extraction...");
+            LogMessage($"Options: Folder={options.InterfacesFolderName}, Prefix={options.InterfacePrefix}, " +
+                      $"AutoUpdate={options.AutoUpdateClass}, IncludeOperators={options.IncludeOperatorOverloads}");
 
             if (dte?.SelectedItems == null)
             {
@@ -153,7 +155,6 @@ namespace InterfaceExtractor.Commands
             int failCount = 0;
             int skippedCount = 0;
 
-            // Track overwrite preference across all files
             OverwriteChoice overwriteChoice = OverwriteChoice.Ask;
 
             foreach (var filePath in selectedFiles)
@@ -162,7 +163,6 @@ namespace InterfaceExtractor.Commands
 
                 try
                 {
-                    // Analyze the class(es)
                     var classInfos = await extractorService.AnalyzeClassesAsync(filePath);
 
                     if (!classInfos.Any())
@@ -172,7 +172,6 @@ namespace InterfaceExtractor.Commands
                         continue;
                     }
 
-                    // If multiple classes, let user choose or process all
                     foreach (var classInfo in classInfos)
                     {
                         LogMessage($"  Found class: {classInfo.ClassName} with {classInfo.Members.Count} public member(s)");
@@ -183,7 +182,6 @@ namespace InterfaceExtractor.Commands
                             continue;
                         }
 
-                        // Convert to selection items
                         var selectionItems = classInfo.Members.Select(m => new UI.MemberSelectionItem
                         {
                             DisplayText = m.Signature,
@@ -193,8 +191,7 @@ namespace InterfaceExtractor.Commands
                             IsSelected = true
                         }).ToList();
 
-                        // Show dialog
-                        var dialog = new UI.ExtractInterfaceDialog(classInfo.ClassName, selectionItems);
+                        var dialog = new UI.ExtractInterfaceDialog(classInfo.ClassName, selectionItems, options);
                         var dialogResult = dialog.ShowDialog();
 
                         if (dialogResult != true)
@@ -204,7 +201,6 @@ namespace InterfaceExtractor.Commands
                             continue;
                         }
 
-                        // Validate interface name
                         if (!IsValidInterfaceName(dialog.InterfaceName, out string validationError))
                         {
                             ShowMessage($"Invalid interface name: {validationError}");
@@ -212,7 +208,6 @@ namespace InterfaceExtractor.Commands
                             continue;
                         }
 
-                        // Get selected members
                         var selectedMembers = classInfo.Members
                             .Where((m, i) => selectionItems[i].IsSelected)
                             .ToList();
@@ -226,19 +221,16 @@ namespace InterfaceExtractor.Commands
 
                         LogMessage($"  Generating interface {dialog.InterfaceName} with {selectedMembers.Count} member(s)");
 
-                        // Generate interface code
-                        var interfaceCode = Services.InterfaceExtractorService.GenerateInterface(
+                        var interfaceCode = extractorService.GenerateInterface(
                             dialog.InterfaceName,
                             classInfo,
                             selectedMembers);
 
-                        // Save interface file
-                        var interfacesFolder = Path.Combine(Path.GetDirectoryName(filePath), Constants.InterfacesFolderName);
+                        var interfacesFolder = Path.Combine(Path.GetDirectoryName(filePath), options.InterfacesFolderName);
                         Directory.CreateDirectory(interfacesFolder);
 
                         var interfaceFilePath = Path.Combine(interfacesFolder, $"{dialog.InterfaceName}{Constants.CSharpExtension}");
 
-                        // Check if file exists
                         if (File.Exists(interfaceFilePath))
                         {
                             bool shouldOverwrite = false;
@@ -295,33 +287,37 @@ namespace InterfaceExtractor.Commands
                         File.WriteAllText(interfaceFilePath, interfaceCode);
                         LogMessage($"  Created: {interfaceFilePath}");
 
-                        // Update the original class to implement the interface
-                        try
+                        if (options.AutoUpdateClass)
                         {
-                            var originalCode = File.ReadAllText(filePath);
-                            var updatedCode = Services.InterfaceExtractorService.AppendInterfaceToClass(
-                                originalCode,
-                                classInfo.ClassName,
-                                dialog.InterfaceName,
-                                $"{classInfo.Namespace}{Constants.InterfacesNamespaceSuffix}");
+                            try
+                            {
+                                var originalCode = File.ReadAllText(filePath);
+                                var updatedCode = extractorService.AppendInterfaceToClass(
+                                    originalCode,
+                                    classInfo.ClassName,
+                                    dialog.InterfaceName,
+                                    $"{classInfo.Namespace}{options.InterfacesNamespaceSuffix}");
 
-                            if (updatedCode != originalCode)
-                            {
-                                File.WriteAllText(filePath, updatedCode);
-                                LogMessage($"  Updated class to implement {dialog.InterfaceName}");
+                                if (updatedCode != originalCode)
+                                {
+                                    File.WriteAllText(filePath, updatedCode);
+                                    LogMessage($"  Updated class to implement {dialog.InterfaceName}");
+                                }
+                                else
+                                {
+                                    LogMessage($"  Class already implements {dialog.InterfaceName}");
+                                }
                             }
-                            else
+                            catch (Exception ex)
                             {
-                                LogMessage($"  Class already implements {dialog.InterfaceName}");
+                                LogMessage($"  Warning: Could not update class to implement interface: {ex.Message}");
                             }
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            LogMessage($"  Warning: Could not update class to implement interface: {ex.Message}");
-                            // Continue - interface was still created successfully
+                            LogMessage($"  Skipped class update (disabled in options)");
                         }
 
-                        // Add to project
                         var projectItem = dte.Solution.FindProjectItem(filePath);
                         if (projectItem?.ContainingProject != null)
                         {
@@ -332,10 +328,9 @@ namespace InterfaceExtractor.Commands
                                     .FirstOrDefault(pi =>
                                     {
                                         ThreadHelper.ThrowIfNotOnUIThread();
-                                        return pi.Name == Constants.InterfacesFolderName;
-                                    }) ?? projectItems.AddFolder(Constants.InterfacesFolderName);
+                                        return pi.Name == options.InterfacesFolderName;
+                                    }) ?? projectItems.AddFolder(options.InterfacesFolderName);
 
-                                // Check if already in project
                                 var existingItem = interfacesFolderItem?.ProjectItems.Cast<ProjectItem>()
                                     .FirstOrDefault(pi =>
                                     {
@@ -356,7 +351,6 @@ namespace InterfaceExtractor.Commands
                             catch (Exception ex)
                             {
                                 LogMessage($"  Warning: Could not add file to project: {ex.Message}");
-                                // File created successfully, just couldn't add to project
                             }
                         }
 
@@ -401,14 +395,12 @@ namespace InterfaceExtractor.Commands
                 return false;
             }
 
-            // Check if valid C# identifier
             if (!Microsoft.CodeAnalysis.CSharp.SyntaxFacts.IsValidIdentifier(name))
             {
                 error = "Interface name is not a valid C# identifier.";
                 return false;
             }
 
-            // Check if it's a reserved keyword
             if (Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(name) != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
             {
                 error = "Interface name cannot be a C# keyword.";
@@ -441,9 +433,6 @@ namespace InterfaceExtractor.Commands
         }
     }
 
-    /// <summary>
-    /// Represents the user's choice for overwriting files (internal tracking)
-    /// </summary>
     internal enum OverwriteChoice
     {
         Ask,
@@ -451,24 +440,15 @@ namespace InterfaceExtractor.Commands
         NoToAll
     }
 
-    /// <summary>
-    /// Extension methods for JoinableTask fire-and-forget operations
-    /// </summary>
     internal static class JoinableTaskExtensions
     {
-        /// <summary>
-        /// Allows fire-and-forget for JoinableTask while ensuring proper exception handling
-        /// </summary>
         public static void FileAndForget(this Microsoft.VisualStudio.Threading.JoinableTask joinableTask, string context)
         {
-            // JoinableTask already handles the async operation properly
-            // Just need to observe it to prevent unobserved task exceptions
             _ = joinableTask.Task.ContinueWith(
                 t =>
                 {
                     if (t.IsFaulted && t.Exception != null)
                     {
-                        // Log to activity log
                         ActivityLog.LogError(context, $"Unhandled exception: {t.Exception.InnerException?.Message ?? t.Exception.Message}");
                     }
                 },

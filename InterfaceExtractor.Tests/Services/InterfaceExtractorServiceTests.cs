@@ -396,8 +396,8 @@ namespace TestNamespace
                 ]
             };
 
-            // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            // Act - using instance method
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
@@ -432,7 +432,7 @@ namespace TestNamespace
             };
 
             // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
@@ -465,7 +465,7 @@ namespace TestNamespace
             };
 
             // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
@@ -487,17 +487,17 @@ namespace TestNamespace
                 Members =
                 [
                     new MemberInfo { Type = MemberType.Property, Signature = "string First { get; set; }", Name = "First" },
-            new MemberInfo { Type = MemberType.Property, Signature = "string Second { get; set; }", Name = "Second" }
+                    new MemberInfo { Type = MemberType.Property, Signature = "string Second { get; set; }", Name = "Second" }
                 ]
             };
 
             // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
 
-            var lines = result.Split(new[] { '\r', '\n' }, StringSplitOptions.None);
+            var lines = result.Split(['\r', '\n'], StringSplitOptions.None);
             var firstIndex = Array.FindIndex(lines, l => l.Contains("string First"));
             var secondIndex = Array.FindIndex(lines, l => l.Contains("string Second"));
 
@@ -527,8 +527,8 @@ namespace TestNamespace
     }
 }";
 
-            // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            // Act - using instance method
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -552,7 +552,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -576,7 +576,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -600,7 +600,7 @@ namespace TestNamespace.Interfaces
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -627,7 +627,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -654,7 +654,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -679,7 +679,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
