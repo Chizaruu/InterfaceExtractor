@@ -119,7 +119,6 @@ jobs:
         run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /v:m /warnaserror
       
       - name: Check for Build Warnings
-        if: success()
         shell: pwsh
         run: |
           Write-Host "✅ Build completed successfully with no warnings!"
