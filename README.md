@@ -214,6 +214,8 @@ namespace MyProject.Data.Interfaces
 
 ### Operator Overloads (New in v1.1)
 
+**Note:** Interface operator members shown below are conceptual. In C# 11+, operators in interfaces require `static abstract` keywords. This extension generates the signatures as shown for reference purposes.
+
 **Input:**
 
 ```csharp
@@ -271,6 +273,12 @@ namespace MyProject.Interfaces
         implicit operator string(Vector v);
     }
 }
+```
+
+**For C# 11+ compatibility, you would manually add `static abstract` keywords:**
+```csharp
+static abstract Vector operator +(Vector a, Vector b);
+static abstract implicit operator string(Vector v);
 ```
 
 ### Generic Methods with Constraints
@@ -374,7 +382,7 @@ InterfaceExtractor/
 - Only processes public, non-static members
 - Nested classes: only processes top-level classes
 - Partial classes: only analyzes the current file
-- Operator overloads in interfaces are valid C# but rarely used in practice
+- Operator overloads in interfaces: Generated signatures are conceptual and require manual addition of `static abstract` keywords for C# 11+ compatibility
 
 ## Roadmap
 

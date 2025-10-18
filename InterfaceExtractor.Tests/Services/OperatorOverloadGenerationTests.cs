@@ -21,9 +21,9 @@ namespace InterfaceExtractor.Tests.Services
             {
                 ClassName = "Vector",
                 Namespace = "Math",
-                Usings = new System.Collections.Generic.List<string> { "using System;" },
-                Members = new System.Collections.Generic.List<MemberInfo>
-                {
+                Usings = ["using System;"],
+                Members =
+                [
                     new MemberInfo
                     {
                         Type = MemberType.Property,
@@ -37,7 +37,7 @@ namespace InterfaceExtractor.Tests.Services
                         Name = "operator +",
                         ReturnType = "Vector"
                     }
-                }
+                ]
             };
 
             // Act
@@ -64,9 +64,9 @@ namespace InterfaceExtractor.Tests.Services
             {
                 ClassName = "Money",
                 Namespace = "Finance",
-                Usings = new System.Collections.Generic.List<string>(),
-                Members = new System.Collections.Generic.List<MemberInfo>
-                {
+                Usings = [],
+                Members =
+                [
                     new MemberInfo
                     {
                         Type = MemberType.Operator,
@@ -81,7 +81,7 @@ namespace InterfaceExtractor.Tests.Services
                         Name = "explicit operator string",
                         ReturnType = "string"
                     }
-                }
+                ]
             };
 
             // Act

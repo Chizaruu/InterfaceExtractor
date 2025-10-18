@@ -216,8 +216,8 @@ namespace InterfaceExtractor.Tests.Integration
                 "ISimpleClass",
                 "TestNamespace.Interfaces");
 
-            // Assert
-            updatedCode.Should().Contain("public class SimpleClass : TestNamespace.Interfaces.ISimpleClass");
+            // Assert - With default options (AddUsingDirective=true), should use simple name
+            updatedCode.Should().Contain("public class SimpleClass : ISimpleClass");
             updatedCode.Should().Contain("using TestNamespace.Interfaces;");
         }
 

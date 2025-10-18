@@ -534,8 +534,9 @@ namespace TestNamespace
                 "ITestClass",
                 "TestNamespace.Interfaces");
 
-            // Assert
-            result.Should().Contain("public class TestClass : TestNamespace.Interfaces.ITestClass");
+            // Assert - Default options have AddUsingDirective=true, so uses simple name
+            result.Should().Contain("public class TestClass : ITestClass");
+            result.Should().Contain("using TestNamespace.Interfaces;");
         }
 
         [Fact]
@@ -558,8 +559,9 @@ namespace TestNamespace
                 "ITestClass",
                 "TestNamespace.Interfaces");
 
-            // Assert
-            result.Should().Contain("public class TestClass : BaseClass, TestNamespace.Interfaces.ITestClass");
+            // Assert - Default options have AddUsingDirective=true, so uses simple name
+            result.Should().Contain("public class TestClass : BaseClass, ITestClass");
+            result.Should().Contain("using TestNamespace.Interfaces;");
         }
 
         [Fact]
@@ -634,6 +636,32 @@ namespace TestNamespace
                 "TestNamespace.Interfaces");
 
             // Assert
+            result.Should().Contain("using TestNamespace.Interfaces;");
+        }
+
+        [Fact]
+        public void AppendInterfaceToClass_WithAddUsingDirective_UsesSimpleName()
+        {
+            // Arrange
+            var sourceCode = @"
+namespace TestNamespace
+{
+    public class TestClass
+    {
+        public string Name { get; set; }
+    }
+}";
+
+            // Act
+            var result = _service.AppendInterfaceToClass(
+                sourceCode,
+                "TestClass",
+                "ITestClass",
+                "TestNamespace.Interfaces");
+
+            // Assert - Should use simple name since using directive is added
+            result.Should().Contain("public class TestClass : ITestClass");
+            result.Should().NotContain("TestNamespace.Interfaces.ITestClass");
             result.Should().Contain("using TestNamespace.Interfaces;");
         }
 
