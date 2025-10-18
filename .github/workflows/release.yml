@@ -131,7 +131,6 @@ jobs:
           Write-Host "Current version: $currentVersion"
           
           $bumpType = "${{ steps.version-bump.outputs.BUMP_TYPE }}"
-          $conventionalCommitFound = "${{ steps.version-bump.outputs.CONVENTIONAL_COMMIT_FOUND }}"
           $branchName = "${{ github.ref_name }}"
           
           # Parse version components
@@ -140,67 +139,35 @@ jobs:
           $minor = [int]$versionParts[1]
           $patch = [int]$versionParts[2]
           
-          # Only bump base version if conventional commits were found
-          if ($conventionalCommitFound -eq "true") {
-            if ($bumpType -eq "major") {
-              $major++
-              $minor = 0
-              $patch = 0
-            }
-            elseif ($bumpType -eq "minor") {
-              $minor++
-              $patch = 0
-            }
-            elseif ($bumpType -eq "patch") {
-              $patch++
-            }
+          # Bump version based on conventional commit type
+          if ($bumpType -eq "major") {
+            $major++
+            $minor = 0
+            $patch = 0
           }
-          else {
-            Write-Host "ℹ️ No conventional commits found - keeping base version at $major.$minor.$patch"
+          elseif ($bumpType -eq "minor") {
+            $minor++
+            $patch = 0
+          }
+          elseif ($bumpType -eq "patch") {
+            $patch++
           }
           
           $baseVersion = "$major.$minor.$patch"
           
-          # Determine prerelease type based on branch
+          # Determine release type based on branch
           if ($branchName -eq "dev") {
-            # Dev branch: find the next dev prerelease number
-            $lastDevTag = git tag -l "v$baseVersion-dev.*" --sort=-version:refname | Select-Object -First 1
-            
-            if ([string]::IsNullOrEmpty($lastDevTag)) {
-              $prereleaseNum = 0
-            }
-            elseif ($lastDevTag -match 'dev\.(\d+)') {
-              $prereleaseNum = [int]$matches[1] + 1
-            }
-            else {
-              Write-Host "⚠️ Warning: Could not parse dev tag '$lastDevTag', starting from 0"
-              $prereleaseNum = 0
-            }
-            
-            $prereleaseNum = $prereleaseNum.ToString("00")
-            $newVersion = "$baseVersion.$prereleaseNum"
-            $displayVersion = "$baseVersion-dev.$prereleaseNum"
+            # Dev branch: simple prerelease suffix
+            $newVersion = "$baseVersion.0"
+            $displayVersion = "$baseVersion-dev"
             $isPrerelease = "true"
             $tagName = "v$displayVersion"
             $releaseName = "v$displayVersion 🔧 Dev Release"
             $releaseType = "dev"
-            
-            if ($conventionalCommitFound -eq "true") {
-              Write-Host "🔧 Dev version: $displayVersion ($bumpType bump)"
-            }
-            else {
-              Write-Host "🔧 Dev version: $displayVersion (prerelease increment only)"
-            }
+            Write-Host "🔧 Dev version: $displayVersion ($bumpType bump)"
           }
           else {
             # Main branch: production release
-            if ($conventionalCommitFound -eq "false") {
-              Write-Host "⚠️ Warning: No conventional commits found on main branch"
-              Write-Host "Proceeding with patch bump for production release"
-              $patch++
-              $baseVersion = "$major.$minor.$patch"
-            }
-            
             $newVersion = "$baseVersion.0"
             $displayVersion = $baseVersion
             $isPrerelease = "false"
@@ -295,21 +262,19 @@ jobs:
         run: |
           $releaseType = "${{ steps.version.outputs.RELEASE_TYPE }}"
           $displayVersion = "${{ steps.version.outputs.DISPLAY_VERSION }}"
+          $currentTag = "${{ steps.version.outputs.TAG_NAME }}"
           
-          # Extract base version (e.g., "1.0.1" from "1.0.1-dev.02")
+          # Extract base version (e.g., "1.0.1" from "1.0.1-dev")
           $baseVersion = $displayVersion -replace '-.*$', ''
           
-          # Find the last tag of the same type and base version
+          # Find the last tag of the same type (excluding current tag)
           if ($releaseType -eq "dev") {
-            $lastTag = git tag -l "v$baseVersion-dev.*" --sort=-version:refname | Select-Object -Skip 1 -First 1
-            
-            # If no previous tag with same base version, find last dev tag of any version
-            if ([string]::IsNullOrEmpty($lastTag)) {
-              $lastTag = git tag -l "v*-dev.*" --sort=-version:refname | Select-Object -First 1
-            }
+            # Get last dev tag (excluding current)
+            $lastTag = git tag -l "v*-dev" --sort=-version:refname | Where-Object { $_ -ne $currentTag } | Select-Object -First 1
           }
           else {
-            $lastTag = git tag -l "v*" --sort=-version:refname | Where-Object { $_ -notmatch "-" } | Select-Object -Skip 1 -First 1
+            # Production releases: exclude current tag and any prerelease tags
+            $lastTag = git tag -l "v*" --sort=-version:refname | Where-Object { $_ -notmatch "-" -and $_ -ne $currentTag } | Select-Object -First 1
           }
           
           # Get tag info and commit SHA
