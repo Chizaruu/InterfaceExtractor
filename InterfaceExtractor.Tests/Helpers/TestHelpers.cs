@@ -285,6 +285,95 @@ namespace TestNamespace
         }
     }
 }";
+
+            // v1.2.0: Record types
+            public static string SimpleRecord => @"
+namespace TestNamespace
+{
+    public record Person
+    {
+        public string FirstName { get; init; }
+        public string LastName { get; init; }
+        public int Age { get; init; }
+    }
+}";
+
+            public static string PrimaryConstructorRecord => @"
+namespace TestNamespace
+{
+    public record Person(string FirstName, string LastName, int Age);
+}";
+
+            public static string RecordWithMethods => @"
+using System;
+
+namespace TestNamespace
+{
+    public record Person
+    {
+        public string FirstName { get; init; }
+        public string LastName { get; init; }
+        public DateTime BirthDate { get; init; }
+
+        public int GetAge() => (DateTime.Now - BirthDate).Days / 365;
+        public string GetFullName() => $""{FirstName} {LastName}"";
+    }
+}";
+
+            // v1.2.0: Partial classes
+            public static string PartialClassPart1 => @"
+namespace TestNamespace
+{
+    public partial class UserService
+    {
+        public void GetUser(int id) { }
+        public void UpdateUser(User user) { }
+    }
+
+    public class User
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
+    }
+}";
+
+            public static string PartialClassPart2 => @"
+namespace TestNamespace
+{
+    public partial class UserService
+    {
+        public void DeleteUser(int id) { }
+        public void ListUsers() { }
+    }
+}";
+
+            // v1.2.0: Internal members
+            public static string ClassWithInternalMembers => @"
+using System;
+
+namespace TestNamespace
+{
+    public class ApiService
+    {
+        public void PublicApi() { }
+        internal void InternalApi() { }
+        private void PrivateApi() { }
+
+        public string PublicProperty { get; set; }
+        internal string InternalProperty { get; set; }
+        private string PrivateProperty { get; set; }
+    }
+}";
+
+            public static string InternalClass => @"
+namespace TestNamespace
+{
+    internal class InternalDataService
+    {
+        public void ProcessData() { }
+        public string Data { get; set; }
+    }
+}";
         }
 
         /// <summary>

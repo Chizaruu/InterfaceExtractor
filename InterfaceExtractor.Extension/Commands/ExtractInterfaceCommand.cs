@@ -2,6 +2,7 @@
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using InterfaceExtractor.Options;
 using System;
 using System.ComponentModel.Design;
 using System.IO;
@@ -18,6 +19,7 @@ namespace InterfaceExtractor.Commands
         private readonly AsyncPackage package;
         private readonly Services.InterfaceExtractorService extractorService;
         private readonly DTE2 dte;
+        private readonly ExtractorOptions options;
         private IVsOutputWindowPane outputPane;
 
         private ExtractInterfaceCommand(AsyncPackage package, OleMenuCommandService commandService, DTE2 dte)
@@ -26,7 +28,8 @@ namespace InterfaceExtractor.Commands
             this.dte = dte ?? throw new ArgumentNullException(nameof(dte));
             commandService = commandService ?? throw new ArgumentNullException(nameof(commandService));
 
-            extractorService = new Services.InterfaceExtractorService();
+            options = OptionsProvider.GetOptions(package);
+            extractorService = new Services.InterfaceExtractorService(options);
 
             var menuCommandID = new CommandID(CommandSet, CommandId);
             var menuItem = new OleMenuCommand(this.Execute, menuCommandID);
@@ -40,13 +43,11 @@ namespace InterfaceExtractor.Commands
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
 
-            // Get services asynchronously
             var commandService = await package.GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService;
             var dte = await package.GetServiceAsync(typeof(DTE)) as DTE2;
 
             Instance = new ExtractInterfaceCommand(package, commandService, dte);
 
-            // Initialize output pane
             await Instance.InitializeOutputPaneAsync();
         }
 
@@ -73,7 +74,6 @@ namespace InterfaceExtractor.Commands
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            // Pattern matching (C# 7.3 compatible)
             if (!(sender is OleMenuCommand command)) return;
 
             command.Visible = false;
@@ -98,7 +98,6 @@ namespace InterfaceExtractor.Commands
 
         private void Execute(object sender, EventArgs e)
         {
-            // Use the package's JoinableTaskFactory for proper async execution
             this.package.JoinableTaskFactory.RunAsync(async () =>
             {
                 try
@@ -119,7 +118,12 @@ namespace InterfaceExtractor.Commands
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
+            LogMessage("=== Interface Extractor v1.2.0 ===");
             LogMessage("Starting interface extraction...");
+            LogMessage($"Options: Folder={options.InterfacesFolderName}, Prefix={options.InterfacePrefix}");
+            LogMessage($"  AutoUpdate={options.AutoUpdateClass}, IncludeOperators={options.IncludeOperatorOverloads}");
+            LogMessage($"  ShowPreview={options.ShowPreviewBeforeSaving}, IncludeInternal={options.IncludeInternalMembers}");
+            LogMessage($"  AnalyzePartial={options.AnalyzePartialClasses}, GenerateStubs={options.GenerateImplementationStubs}");
 
             if (dte?.SelectedItems == null)
             {
@@ -136,9 +140,13 @@ namespace InterfaceExtractor.Commands
                 .Select(item =>
                 {
                     ThreadHelper.ThrowIfNotOnUIThread();
-                    return item.ProjectItem.FileNames[1];
+                    return new
+                    {
+                        Path = item.ProjectItem.FileNames[1],
+                        item.ProjectItem
+                    };
                 })
-                .Where(path => Path.GetExtension(path).Equals(Constants.CSharpExtension, StringComparison.OrdinalIgnoreCase))
+                .Where(f => Path.GetExtension(f.Path).Equals(Constants.CSharpExtension, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (!selectedFiles.Any())
@@ -153,37 +161,45 @@ namespace InterfaceExtractor.Commands
             int failCount = 0;
             int skippedCount = 0;
 
-            // Track overwrite preference across all files
             OverwriteChoice overwriteChoice = OverwriteChoice.Ask;
 
-            foreach (var filePath in selectedFiles)
+            foreach (var file in selectedFiles)
             {
+                var filePath = file.Path;
                 LogMessage($"Analyzing: {Path.GetFileName(filePath)}");
 
                 try
                 {
-                    // Analyze the class(es)
-                    var classInfos = await extractorService.AnalyzeClassesAsync(filePath);
+                    // Get project directory for partial class analysis
+                    string projectDirectory = null;
+                    if (file.ProjectItem?.ContainingProject != null)
+                    {
+                        var projectPath = file.ProjectItem.ContainingProject.FullName;
+                        projectDirectory = Path.GetDirectoryName(projectPath);
+                    }
+
+                    var classInfos = await extractorService.AnalyzeClassesAsync(filePath, projectDirectory);
 
                     if (!classInfos.Any())
                     {
-                        LogMessage($"  No public classes with members found in {Path.GetFileName(filePath)}");
+                        LogMessage($"  No public classes/records with members found in {Path.GetFileName(filePath)}");
                         skippedCount++;
                         continue;
                     }
 
-                    // If multiple classes, let user choose or process all
                     foreach (var classInfo in classInfos)
                     {
-                        LogMessage($"  Found class: {classInfo.ClassName} with {classInfo.Members.Count} public member(s)");
+                        var typeKind = classInfo.IsRecord ? "record" : "class";
+                        var partialInfo = classInfo.IsPartial ? " (partial)" : "";
+
+                        LogMessage($"  Found {typeKind}: {classInfo.ClassName}{partialInfo} with {classInfo.Members.Count} member(s)");
 
                         if (!classInfo.Members.Any())
                         {
-                            LogMessage($"  No public members found in class {classInfo.ClassName}");
+                            LogMessage($"  No accessible members found in {typeKind} {classInfo.ClassName}");
                             continue;
                         }
 
-                        // Convert to selection items
                         var selectionItems = classInfo.Members.Select(m => new UI.MemberSelectionItem
                         {
                             DisplayText = m.Signature,
@@ -193,8 +209,7 @@ namespace InterfaceExtractor.Commands
                             IsSelected = true
                         }).ToList();
 
-                        // Show dialog
-                        var dialog = new UI.ExtractInterfaceDialog(classInfo.ClassName, selectionItems);
+                        var dialog = new UI.ExtractInterfaceDialog(classInfo.ClassName, selectionItems, options);
                         var dialogResult = dialog.ShowDialog();
 
                         if (dialogResult != true)
@@ -204,7 +219,6 @@ namespace InterfaceExtractor.Commands
                             continue;
                         }
 
-                        // Validate interface name
                         if (!IsValidInterfaceName(dialog.InterfaceName, out string validationError))
                         {
                             ShowMessage($"Invalid interface name: {validationError}");
@@ -212,7 +226,6 @@ namespace InterfaceExtractor.Commands
                             continue;
                         }
 
-                        // Get selected members
                         var selectedMembers = classInfo.Members
                             .Where((m, i) => selectionItems[i].IsSelected)
                             .ToList();
@@ -226,19 +239,37 @@ namespace InterfaceExtractor.Commands
 
                         LogMessage($"  Generating interface {dialog.InterfaceName} with {selectedMembers.Count} member(s)");
 
-                        // Generate interface code
-                        var interfaceCode = Services.InterfaceExtractorService.GenerateInterface(
+                        var interfaceCode = extractorService.GenerateInterface(
                             dialog.InterfaceName,
                             classInfo,
                             selectedMembers);
 
-                        // Save interface file
-                        var interfacesFolder = Path.Combine(Path.GetDirectoryName(filePath), Constants.InterfacesFolderName);
+                        var interfacesFolder = Path.Combine(Path.GetDirectoryName(filePath), options.InterfacesFolderName);
                         Directory.CreateDirectory(interfacesFolder);
 
                         var interfaceFilePath = Path.Combine(interfacesFolder, $"{dialog.InterfaceName}{Constants.CSharpExtension}");
 
-                        // Check if file exists
+                        // Show preview if enabled (v1.2.0)
+                        if (options.ShowPreviewBeforeSaving)
+                        {
+                            var previewDialog = new UI.PreviewDialog(
+                                dialog.InterfaceName,
+                                interfaceFilePath,
+                                interfaceCode);
+
+                            var previewResult = previewDialog.ShowDialog();
+
+                            if (previewResult != true || !previewDialog.UserApproved)
+                            {
+                                LogMessage($"  User cancelled after preview");
+                                skippedCount++;
+                                continue;
+                            }
+
+                            LogMessage($"  User approved preview");
+                        }
+
+                        // Handle existing file
                         if (File.Exists(interfaceFilePath))
                         {
                             bool shouldOverwrite = false;
@@ -292,33 +323,63 @@ namespace InterfaceExtractor.Commands
                             }
                         }
 
+                        // Write interface file
                         File.WriteAllText(interfaceFilePath, interfaceCode);
                         LogMessage($"  Created: {interfaceFilePath}");
 
-                        // Update the original class to implement the interface
-                        try
+                        // Generate implementation stub if enabled (v1.2.0)
+                        if (options.GenerateImplementationStubs)
                         {
-                            var originalCode = File.ReadAllText(filePath);
-                            var updatedCode = Services.InterfaceExtractorService.AppendInterfaceToClass(
-                                originalCode,
-                                classInfo.ClassName,
+                            var stubClassName = $"{classInfo.ClassName}{options.ImplementationStubSuffix}";
+                            var stubCode = extractorService.GenerateImplementationStub(
                                 dialog.InterfaceName,
-                                $"{classInfo.Namespace}{Constants.InterfacesNamespaceSuffix}");
+                                stubClassName,
+                                classInfo,
+                                selectedMembers);
 
-                            if (updatedCode != originalCode)
+                            var stubFilePath = Path.Combine(interfacesFolder, $"{stubClassName}{Constants.CSharpExtension}");
+
+                            if (!File.Exists(stubFilePath) || overwriteChoice == OverwriteChoice.YesToAll)
                             {
-                                File.WriteAllText(filePath, updatedCode);
-                                LogMessage($"  Updated class to implement {dialog.InterfaceName}");
+                                File.WriteAllText(stubFilePath, stubCode);
+                                LogMessage($"  Created implementation stub: {stubFilePath}");
                             }
                             else
                             {
-                                LogMessage($"  Class already implements {dialog.InterfaceName}");
+                                LogMessage($"  Skipped implementation stub (file exists): {stubClassName}");
                             }
                         }
-                        catch (Exception ex)
+
+                        // Update class to implement interface
+                        if (options.AutoUpdateClass)
                         {
-                            LogMessage($"  Warning: Could not update class to implement interface: {ex.Message}");
-                            // Continue - interface was still created successfully
+                            try
+                            {
+                                var originalCode = File.ReadAllText(filePath);
+                                var updatedCode = extractorService.AppendInterfaceToClass(
+                                    originalCode,
+                                    classInfo.ClassName,
+                                    dialog.InterfaceName,
+                                    $"{classInfo.Namespace}{options.InterfacesNamespaceSuffix}");
+
+                                if (updatedCode != originalCode)
+                                {
+                                    File.WriteAllText(filePath, updatedCode);
+                                    LogMessage($"  Updated {typeKind} to implement {dialog.InterfaceName}");
+                                }
+                                else
+                                {
+                                    LogMessage($"  {typeKind.Substring(0, 1).ToUpper()}{typeKind.Substring(1)} already implements {dialog.InterfaceName}");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                LogMessage($"  Warning: Could not update {typeKind} to implement interface: {ex.Message}");
+                            }
+                        }
+                        else
+                        {
+                            LogMessage($"  Skipped {typeKind} update (disabled in options)");
                         }
 
                         // Add to project
@@ -332,31 +393,53 @@ namespace InterfaceExtractor.Commands
                                     .FirstOrDefault(pi =>
                                     {
                                         ThreadHelper.ThrowIfNotOnUIThread();
-                                        return pi.Name == Constants.InterfacesFolderName;
-                                    }) ?? projectItems.AddFolder(Constants.InterfacesFolderName);
+                                        return pi.Name == options.InterfacesFolderName;
+                                    }) ?? projectItems.AddFolder(options.InterfacesFolderName);
 
-                                // Check if already in project
-                                var existingItem = interfacesFolderItem?.ProjectItems.Cast<ProjectItem>()
+                                // Add interface file
+                                var existingInterfaceItem = interfacesFolderItem?.ProjectItems.Cast<ProjectItem>()
                                     .FirstOrDefault(pi =>
                                     {
                                         ThreadHelper.ThrowIfNotOnUIThread();
                                         return pi.Name == $"{dialog.InterfaceName}{Constants.CSharpExtension}";
                                     });
 
-                                if (existingItem == null)
+                                if (existingInterfaceItem == null)
                                 {
                                     interfacesFolderItem?.ProjectItems.AddFromFile(interfaceFilePath);
-                                    LogMessage($"  Added to project");
+                                    LogMessage($"  Added interface to project");
                                 }
                                 else
                                 {
-                                    LogMessage($"  File already in project");
+                                    LogMessage($"  Interface file already in project");
+                                }
+
+                                // Add implementation stub file if generated
+                                if (options.GenerateImplementationStubs)
+                                {
+                                    var stubClassName = $"{classInfo.ClassName}{options.ImplementationStubSuffix}";
+                                    var stubFilePath = Path.Combine(interfacesFolder, $"{stubClassName}{Constants.CSharpExtension}");
+
+                                    if (File.Exists(stubFilePath))
+                                    {
+                                        var existingStubItem = interfacesFolderItem?.ProjectItems.Cast<ProjectItem>()
+                                            .FirstOrDefault(pi =>
+                                            {
+                                                ThreadHelper.ThrowIfNotOnUIThread();
+                                                return pi.Name == $"{stubClassName}{Constants.CSharpExtension}";
+                                            });
+
+                                        if (existingStubItem == null)
+                                        {
+                                            interfacesFolderItem?.ProjectItems.AddFromFile(stubFilePath);
+                                            LogMessage($"  Added implementation stub to project");
+                                        }
+                                    }
                                 }
                             }
                             catch (Exception ex)
                             {
-                                LogMessage($"  Warning: Could not add file to project: {ex.Message}");
-                                // File created successfully, just couldn't add to project
+                                LogMessage($"  Warning: Could not add file(s) to project: {ex.Message}");
                             }
                         }
 
@@ -383,6 +466,7 @@ namespace InterfaceExtractor.Commands
                          $"Failed: {failCount}\n" +
                          $"Skipped: {skippedCount}";
 
+            LogMessage("=== Extraction Complete ===");
             LogMessage(summary.Replace("\n", " "));
 
             if (successCount > 0 || failCount > 0)
@@ -401,14 +485,12 @@ namespace InterfaceExtractor.Commands
                 return false;
             }
 
-            // Check if valid C# identifier
             if (!Microsoft.CodeAnalysis.CSharp.SyntaxFacts.IsValidIdentifier(name))
             {
                 error = "Interface name is not a valid C# identifier.";
                 return false;
             }
 
-            // Check if it's a reserved keyword
             if (Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(name) != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
             {
                 error = "Interface name cannot be a C# keyword.";
@@ -441,9 +523,6 @@ namespace InterfaceExtractor.Commands
         }
     }
 
-    /// <summary>
-    /// Represents the user's choice for overwriting files (internal tracking)
-    /// </summary>
     internal enum OverwriteChoice
     {
         Ask,
@@ -451,24 +530,15 @@ namespace InterfaceExtractor.Commands
         NoToAll
     }
 
-    /// <summary>
-    /// Extension methods for JoinableTask fire-and-forget operations
-    /// </summary>
     internal static class JoinableTaskExtensions
     {
-        /// <summary>
-        /// Allows fire-and-forget for JoinableTask while ensuring proper exception handling
-        /// </summary>
         public static void FileAndForget(this Microsoft.VisualStudio.Threading.JoinableTask joinableTask, string context)
         {
-            // JoinableTask already handles the async operation properly
-            // Just need to observe it to prevent unobserved task exceptions
             _ = joinableTask.Task.ContinueWith(
                 t =>
                 {
                     if (t.IsFaulted && t.Exception != null)
                     {
-                        // Log to activity log
                         ActivityLog.LogError(context, $"Unhandled exception: {t.Exception.InnerException?.Message ?? t.Exception.Message}");
                     }
                 },

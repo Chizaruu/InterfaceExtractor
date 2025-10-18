@@ -3,6 +3,7 @@
   <PropertyGroup>
     <MinimumVisualStudioVersion>17.0</MinimumVisualStudioVersion>
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
+    <RuntimeIdentifiers>win</RuntimeIdentifiers>
   </PropertyGroup>
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -48,10 +49,16 @@
     <Compile Include="Commands\ExtractInterfaceCommand.cs" />
     <Compile Include="Constants.cs" />
     <Compile Include="InterfaceExtractorPackage.cs" />
+    <Compile Include="Options\OptionsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="Services\InterfaceExtractorService.cs" />
     <Compile Include="UI\MemberSelectionItem.cs" />
     <Compile Include="UI\ExtractInterfaceDialog.xaml.cs">
       <DependentUpon>ExtractInterfaceDialog.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="UI\PreviewDialog.xaml.cs">
+      <DependentUpon>PreviewDialog.xaml</DependentUpon>
     </Compile>
     <Compile Include="UI\OverwriteDialog.xaml.cs">
       <DependentUpon>OverwriteDialog.xaml</DependentUpon>
@@ -67,6 +74,10 @@
     <Page Include="UI\ExtractInterfaceDialog.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="UI\PreviewDialog.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
     </Page>
     <Page Include="UI\OverwriteDialog.xaml">
       <SubType>Designer</SubType>

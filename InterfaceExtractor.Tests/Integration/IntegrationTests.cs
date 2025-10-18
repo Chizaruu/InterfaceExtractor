@@ -11,6 +11,7 @@ namespace InterfaceExtractor.Tests.Integration
 {
     /// <summary>
     /// Integration tests that test the complete flow from analysis to interface generation
+    /// Updated for v1.2.0
     /// </summary>
     public class IntegrationTests : IDisposable
     {
@@ -69,7 +70,7 @@ namespace InterfaceExtractor.Tests.Integration
             classInfos[0].Members.Should().HaveCount(3); // Name, Age, DoSomething
 
             // Act - Generate
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "ISimpleClass",
                 classInfos[0],
                 classInfos[0].Members);
@@ -92,7 +93,7 @@ namespace InterfaceExtractor.Tests.Integration
 
             // Act
             var classInfos = await _service.AnalyzeClassesAsync(filePath);
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "IDocumentedClass",
                 classInfos[0],
                 classInfos[0].Members);
@@ -115,7 +116,7 @@ namespace InterfaceExtractor.Tests.Integration
 
             // Act
             var classInfos = await _service.AnalyzeClassesAsync(filePath);
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "IGenericRepository",
                 classInfos[0],
                 classInfos[0].Members);
@@ -209,15 +210,15 @@ namespace InterfaceExtractor.Tests.Integration
             // Arrange
             var sourceCode = TestHelpers.SampleCode.SimpleClass;
 
-            // Act - Append interface to class
-            var updatedCode = InterfaceExtractorService.AppendInterfaceToClass(
+            // Act
+            var updatedCode = _service.AppendInterfaceToClass(
                 sourceCode,
                 "SimpleClass",
                 "ISimpleClass",
                 "TestNamespace.Interfaces");
 
             // Assert
-            updatedCode.Should().Contain("public class SimpleClass : TestNamespace.Interfaces.ISimpleClass");
+            updatedCode.Should().Contain("public class SimpleClass : ISimpleClass");
             updatedCode.Should().Contain("using TestNamespace.Interfaces;");
         }
 
@@ -237,7 +238,7 @@ namespace InterfaceExtractor.Tests.Integration
                 .Where(m => m.Name == "Name")
                 .ToList();
 
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "ISimpleClass",
                 classInfos[0],
                 selectedMembers);
@@ -305,7 +306,7 @@ namespace InterfaceExtractor.Tests.Integration
 
             // Act
             var classInfos = await _service.AnalyzeClassesAsync(filePath);
-            var interfaceCode = InterfaceExtractorService.GenerateInterface(
+            var interfaceCode = _service.GenerateInterface(
                 "ISimpleClass",
                 classInfos[0],
                 classInfos[0].Members);
@@ -322,6 +323,122 @@ namespace InterfaceExtractor.Tests.Integration
             var tree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(savedContent);
             var diagnostics = tree.GetDiagnostics();
 
+            diagnostics.Should().NotContain(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        }
+
+        // v1.2.0: Record type tests
+        [Fact]
+        public async Task CompleteFlow_SimpleRecord_GeneratesCorrectInterfaceAsync()
+        {
+            // Arrange
+            var filePath = TestHelpers.CreateTempCSharpFile(
+                TestHelpers.SampleCode.SimpleRecord,
+                _tempDirectory);
+
+            // Act
+            var classInfos = await _service.AnalyzeClassesAsync(filePath);
+
+            // Assert
+            classInfos.Should().HaveCount(1);
+            classInfos[0].ClassName.Should().Be("Person");
+            classInfos[0].IsRecord.Should().BeTrue();
+            classInfos[0].Members.Should().HaveCount(3); // FirstName, LastName, Age
+        }
+
+        [Fact]
+        public async Task CompleteFlow_RecordWithMethods_ExtractsAllMembersAsync()
+        {
+            // Arrange
+            var filePath = TestHelpers.CreateTempCSharpFile(
+                TestHelpers.SampleCode.RecordWithMethods,
+                _tempDirectory);
+
+            // Act
+            var classInfos = await _service.AnalyzeClassesAsync(filePath);
+            var interfaceCode = _service.GenerateInterface(
+                "IPerson",
+                classInfos[0],
+                classInfos[0].Members);
+
+            // Assert
+            classInfos[0].IsRecord.Should().BeTrue();
+            interfaceCode.Should().Contain("public interface IPerson");
+            // init accessors are converted to get-only in interfaces (init not valid in interfaces)
+            interfaceCode.Should().Contain("string FirstName { get; }");
+            interfaceCode.Should().Contain("string LastName { get; }");
+            interfaceCode.Should().Contain("DateTime BirthDate { get; }");
+            interfaceCode.Should().Contain("int GetAge();");
+            interfaceCode.Should().Contain("string GetFullName();");
+        }
+
+        // v1.2.0: Internal member tests
+        [Fact]
+        public async Task CompleteFlow_InternalMembers_ExcludedByDefaultAsync()
+        {
+            // Arrange
+            var filePath = TestHelpers.CreateTempCSharpFile(
+                TestHelpers.SampleCode.ClassWithInternalMembers,
+                _tempDirectory);
+
+            // Act
+            var classInfos = await _service.AnalyzeClassesAsync(filePath);
+
+            // Assert
+            var members = classInfos[0].Members;
+            members.Should().Contain(m => m.Name == "PublicApi");
+            members.Should().Contain(m => m.Name == "PublicProperty");
+            members.Should().NotContain(m => m.Name == "InternalApi");
+            members.Should().NotContain(m => m.Name == "InternalProperty");
+        }
+
+        [Fact]
+        public async Task CompleteFlow_InternalClass_ExcludedByDefaultAsync()
+        {
+            // Arrange
+            var filePath = TestHelpers.CreateTempCSharpFile(
+                TestHelpers.SampleCode.InternalClass,
+                _tempDirectory);
+
+            // Act
+            var classInfos = await _service.AnalyzeClassesAsync(filePath);
+
+            // Assert
+            classInfos.Should().BeEmpty();
+        }
+
+        // v1.2.0: Implementation stub tests
+        [Fact]
+        public async Task CompleteFlow_GenerateImplementationStub_CreatesValidClassAsync()
+        {
+            // Arrange
+            var options = new Options.ExtractorOptions
+            {
+                GenerateImplementationStubs = true,
+                ImplementationStubSuffix = "Implementation"
+            };
+            var service = new InterfaceExtractorService(options);
+
+            var filePath = TestHelpers.CreateTempCSharpFile(
+                TestHelpers.SampleCode.SimpleClass,
+                _tempDirectory);
+
+            // Act
+            var classInfos = await service.AnalyzeClassesAsync(filePath);
+            var stubCode = service.GenerateImplementationStub(
+                "ISimpleClass",
+                "SimpleClassImplementation",
+                classInfos[0],
+                classInfos[0].Members);
+
+            // Assert
+            stubCode.Should().Contain("public class SimpleClassImplementation : ISimpleClass");
+            stubCode.Should().Contain("public string Name { get; set; }");
+            stubCode.Should().Contain("public int Age { get; set; }");
+            stubCode.Should().Contain("public void DoSomething()");
+
+            // Verify it compiles
+            var tree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(stubCode);
+            var diagnostics = tree.GetDiagnostics();
             diagnostics.Should().NotContain(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
         }
     }

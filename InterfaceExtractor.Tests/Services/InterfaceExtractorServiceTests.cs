@@ -396,8 +396,8 @@ namespace TestNamespace
                 ]
             };
 
-            // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            // Act - using instance method
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
@@ -432,7 +432,7 @@ namespace TestNamespace
             };
 
             // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
@@ -465,7 +465,7 @@ namespace TestNamespace
             };
 
             // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
@@ -487,17 +487,17 @@ namespace TestNamespace
                 Members =
                 [
                     new MemberInfo { Type = MemberType.Property, Signature = "string First { get; set; }", Name = "First" },
-            new MemberInfo { Type = MemberType.Property, Signature = "string Second { get; set; }", Name = "Second" }
+                    new MemberInfo { Type = MemberType.Property, Signature = "string Second { get; set; }", Name = "Second" }
                 ]
             };
 
             // Act
-            var result = InterfaceExtractorService.GenerateInterface(
+            var result = _service.GenerateInterface(
                 "ITestClass",
                 classInfo,
                 classInfo.Members);
 
-            var lines = result.Split(new[] { '\r', '\n' }, StringSplitOptions.None);
+            var lines = result.Split(['\r', '\n'], StringSplitOptions.None);
             var firstIndex = Array.FindIndex(lines, l => l.Contains("string First"));
             var secondIndex = Array.FindIndex(lines, l => l.Contains("string Second"));
 
@@ -527,15 +527,16 @@ namespace TestNamespace
     }
 }";
 
-            // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            // Act - using instance method
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
                 "TestNamespace.Interfaces");
 
-            // Assert
-            result.Should().Contain("public class TestClass : TestNamespace.Interfaces.ITestClass");
+            // Assert - Default options have AddUsingDirective=true, so uses simple name
+            result.Should().Contain("public class TestClass : ITestClass");
+            result.Should().Contain("using TestNamespace.Interfaces;");
         }
 
         [Fact]
@@ -552,14 +553,15 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
                 "TestNamespace.Interfaces");
 
-            // Assert
-            result.Should().Contain("public class TestClass : BaseClass, TestNamespace.Interfaces.ITestClass");
+            // Assert - Default options have AddUsingDirective=true, so uses simple name
+            result.Should().Contain("public class TestClass : BaseClass, ITestClass");
+            result.Should().Contain("using TestNamespace.Interfaces;");
         }
 
         [Fact]
@@ -576,7 +578,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -600,7 +602,7 @@ namespace TestNamespace.Interfaces
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -627,13 +629,39 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
                 "TestNamespace.Interfaces");
 
             // Assert
+            result.Should().Contain("using TestNamespace.Interfaces;");
+        }
+
+        [Fact]
+        public void AppendInterfaceToClass_WithAddUsingDirective_UsesSimpleName()
+        {
+            // Arrange
+            var sourceCode = @"
+namespace TestNamespace
+{
+    public class TestClass
+    {
+        public string Name { get; set; }
+    }
+}";
+
+            // Act
+            var result = _service.AppendInterfaceToClass(
+                sourceCode,
+                "TestClass",
+                "ITestClass",
+                "TestNamespace.Interfaces");
+
+            // Assert - Should use simple name since using directive is added
+            result.Should().Contain("public class TestClass : ITestClass");
+            result.Should().NotContain("TestNamespace.Interfaces.ITestClass");
             result.Should().Contain("using TestNamespace.Interfaces;");
         }
 
@@ -654,7 +682,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
@@ -679,7 +707,7 @@ namespace TestNamespace
 }";
 
             // Act
-            var result = InterfaceExtractorService.AppendInterfaceToClass(
+            var result = _service.AppendInterfaceToClass(
                 sourceCode,
                 "TestClass",
                 "ITestClass",
