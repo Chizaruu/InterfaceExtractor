@@ -28,7 +28,6 @@ jobs:
     # Require environment approval based on branch
     environment: 
       name: ${{ github.ref_name == 'main' && 'production' || 'development' }}
-      url: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.TAG_NAME }}
 
     permissions:
       contents: write
