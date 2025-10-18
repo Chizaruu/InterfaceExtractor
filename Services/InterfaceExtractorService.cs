@@ -291,6 +291,106 @@ namespace InterfaceExtractor.Services
 
             return string.Empty;
         }
+
+        /// <summary>
+        /// Appends the interface to the class declaration
+        /// </summary>
+        public static string AppendInterfaceToClass(string sourceCode, string className, string interfaceName, string interfaceNamespace)
+        {
+            var tree = CSharpSyntaxTree.ParseText(sourceCode);
+            var root = (CompilationUnitSyntax)tree.GetRoot();
+
+            // Find the target class
+            var classDeclaration = root.DescendantNodes()
+                .OfType<ClassDeclarationSyntax>()
+                .FirstOrDefault(c => c.Identifier.Text == className);
+
+            if (classDeclaration == null)
+            {
+                return sourceCode; // Class not found, return original
+            }
+
+            // Get the class's namespace
+            var classNamespace = classDeclaration.Ancestors()
+                .OfType<BaseNamespaceDeclarationSyntax>()
+                .FirstOrDefault();
+
+            var classNamespaceName = classNamespace?.Name.ToString() ?? "";
+
+            // Determine if we need to use fully qualified name
+            string interfaceToAdd;
+            if (classNamespaceName == interfaceNamespace ||
+                string.IsNullOrEmpty(interfaceNamespace))
+            {
+                // Same namespace, use simple name
+                interfaceToAdd = interfaceName;
+            }
+            else
+            {
+                // Different namespace, use fully qualified name
+                interfaceToAdd = $"{interfaceNamespace}.{interfaceName}";
+            }
+
+            // Check if interface is already implemented
+            if (classDeclaration.BaseList != null)
+            {
+                var existingBases = classDeclaration.BaseList.Types
+                    .Select(t => t.ToString())
+                    .ToList();
+
+                if (existingBases.Any(b => b.Contains(interfaceName)))
+                {
+                    return sourceCode; // Already implements this interface
+                }
+            }
+
+            // Add the interface to the base list
+            ClassDeclarationSyntax newClassDeclaration;
+
+            if (classDeclaration.BaseList == null)
+            {
+                // No base list, create one
+                var baseType = SyntaxFactory.SimpleBaseType(
+                    SyntaxFactory.ParseTypeName(interfaceToAdd));
+
+                var baseList = SyntaxFactory.BaseList(
+                    SyntaxFactory.SingletonSeparatedList<BaseTypeSyntax>(baseType));
+
+                newClassDeclaration = classDeclaration.WithBaseList(baseList);
+            }
+            else
+            {
+                // Add to existing base list
+                var baseType = SyntaxFactory.SimpleBaseType(
+                    SyntaxFactory.ParseTypeName(interfaceToAdd));
+
+                var newBaseList = classDeclaration.BaseList.AddTypes(baseType);
+                newClassDeclaration = classDeclaration.WithBaseList(newBaseList);
+            }
+
+            // Replace the old class with the new one
+            var newRoot = root.ReplaceNode(classDeclaration, newClassDeclaration);
+
+            // Add using directive if needed (for different namespace)
+            if (classNamespaceName != interfaceNamespace &&
+                !string.IsNullOrEmpty(interfaceNamespace))
+            {
+                var usingDirective = SyntaxFactory.UsingDirective(
+                    SyntaxFactory.ParseName(interfaceNamespace));
+
+                // Check if using already exists
+                var existingUsings = newRoot.Usings
+                    .Select(u => u.Name.ToString())
+                    .ToList();
+
+                if (!existingUsings.Contains(interfaceNamespace))
+                {
+                    newRoot = newRoot.AddUsings(usingDirective);
+                }
+            }
+
+            return newRoot.ToFullString();
+        }
     }
 
     public class ExtractedClassInfo

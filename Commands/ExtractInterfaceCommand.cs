@@ -73,6 +73,7 @@ namespace InterfaceExtractor.Commands
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
+            // Pattern matching (C# 7.3 compatible)
             if (!(sender is OleMenuCommand command)) return;
 
             command.Visible = false;
@@ -152,6 +153,9 @@ namespace InterfaceExtractor.Commands
             int failCount = 0;
             int skippedCount = 0;
 
+            // Track overwrite preference across all files
+            OverwriteChoice overwriteChoice = OverwriteChoice.Ask;
+
             foreach (var filePath in selectedFiles)
             {
                 LogMessage($"Analyzing: {Path.GetFileName(filePath)}");
@@ -191,9 +195,9 @@ namespace InterfaceExtractor.Commands
 
                         // Show dialog
                         var dialog = new UI.ExtractInterfaceDialog(classInfo.ClassName, selectionItems);
-                        var result = dialog.ShowDialog();
+                        var dialogResult = dialog.ShowDialog();
 
-                        if (result != true)
+                        if (dialogResult != true)
                         {
                             LogMessage($"  User cancelled extraction for {classInfo.ClassName}");
                             skippedCount++;
@@ -237,11 +241,50 @@ namespace InterfaceExtractor.Commands
                         // Check if file exists
                         if (File.Exists(interfaceFilePath))
                         {
-                            var overwriteResult = ShowConfirmation(
-                                $"File {dialog.InterfaceName}{Constants.CSharpExtension} already exists. Overwrite?",
-                                "File Exists");
+                            bool shouldOverwrite = false;
 
-                            if (overwriteResult != true)
+                            switch (overwriteChoice)
+                            {
+                                case OverwriteChoice.YesToAll:
+                                    shouldOverwrite = true;
+                                    LogMessage($"  Overwriting existing file (Yes to All)");
+                                    break;
+
+                                case OverwriteChoice.NoToAll:
+                                    shouldOverwrite = false;
+                                    LogMessage($"  Skipping existing file (No to All)");
+                                    break;
+
+                                case OverwriteChoice.Ask:
+                                    var overwriteResult = ShowOverwriteConfirmation(
+                                        $"{dialog.InterfaceName}{Constants.CSharpExtension}");
+
+                                    switch (overwriteResult)
+                                    {
+                                        case UI.OverwriteChoice.Yes:
+                                            shouldOverwrite = true;
+                                            break;
+
+                                        case UI.OverwriteChoice.YesToAll:
+                                            shouldOverwrite = true;
+                                            overwriteChoice = OverwriteChoice.YesToAll;
+                                            LogMessage($"  Selected 'Yes to All' for remaining files");
+                                            break;
+
+                                        case UI.OverwriteChoice.No:
+                                            shouldOverwrite = false;
+                                            break;
+
+                                        case UI.OverwriteChoice.NoToAll:
+                                            shouldOverwrite = false;
+                                            overwriteChoice = OverwriteChoice.NoToAll;
+                                            LogMessage($"  Selected 'No to All' for remaining files");
+                                            break;
+                                    }
+                                    break;
+                            }
+
+                            if (!shouldOverwrite)
                             {
                                 LogMessage($"  User chose not to overwrite existing file");
                                 skippedCount++;
@@ -251,6 +294,32 @@ namespace InterfaceExtractor.Commands
 
                         File.WriteAllText(interfaceFilePath, interfaceCode);
                         LogMessage($"  Created: {interfaceFilePath}");
+
+                        // Update the original class to implement the interface
+                        try
+                        {
+                            var originalCode = File.ReadAllText(filePath);
+                            var updatedCode = Services.InterfaceExtractorService.AppendInterfaceToClass(
+                                originalCode,
+                                classInfo.ClassName,
+                                dialog.InterfaceName,
+                                $"{classInfo.Namespace}{Constants.InterfacesNamespaceSuffix}");
+
+                            if (updatedCode != originalCode)
+                            {
+                                File.WriteAllText(filePath, updatedCode);
+                                LogMessage($"  Updated class to implement {dialog.InterfaceName}");
+                            }
+                            else
+                            {
+                                LogMessage($"  Class already implements {dialog.InterfaceName}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogMessage($"  Warning: Could not update class to implement interface: {ex.Message}");
+                            // Continue - interface was still created successfully
+                        }
 
                         // Add to project
                         var projectItem = dte.Solution.FindProjectItem(filePath);
@@ -362,20 +431,24 @@ namespace InterfaceExtractor.Commands
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
         }
 
-        private bool? ShowConfirmation(string message, string title)
+        private static UI.OverwriteChoice ShowOverwriteConfirmation(string fileName)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            var result = VsShellUtilities.ShowMessageBox(
-                this.package,
-                message,
-                title,
-                OLEMSGICON.OLEMSGICON_QUERY,
-                OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
-                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
-
-            return result == 6; // 6 = Yes, 7 = No
+            var dialog = new UI.OverwriteDialog(fileName);
+            dialog.ShowDialog();
+            return dialog.Choice;
         }
+    }
+
+    /// <summary>
+    /// Represents the user's choice for overwriting files (internal tracking)
+    /// </summary>
+    internal enum OverwriteChoice
+    {
+        Ask,
+        YesToAll,
+        NoToAll
     }
 
     /// <summary>
