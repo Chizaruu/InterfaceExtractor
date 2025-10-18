@@ -1,0 +1,248 @@
+name: Visual Studio Extension Release
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+      
+      - name: Restore NuGet packages
+        run: nuget restore InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj
+      
+      - name: Determine version bump type
+        id: version-bump
+        shell: bash
+        run: |
+          # Get the last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Last tag: $LAST_TAG"
+          
+          # Get commits since last tag
+          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s" 2>/dev/null || git log --pretty=format:"%s")
+          echo "Analyzing commits:"
+          echo "$COMMITS"
+          
+          # Determine bump type based on conventional commits
+          BUMP_TYPE="patch"
+          
+          # Check for breaking changes (major version)
+          if echo "$COMMITS" | grep -qiE "^(BREAKING CHANGE|.*!:)"; then
+            BUMP_TYPE="major"
+            echo "🚨 Breaking change detected → MAJOR version bump"
+          # Check for features (minor version)
+          elif echo "$COMMITS" | grep -qiE "^feat(\(.*\))?:"; then
+            BUMP_TYPE="minor"
+            echo "✨ New feature detected → MINOR version bump"
+          # Check for fixes (patch version)
+          elif echo "$COMMITS" | grep -qiE "^fix(\(.*\))?:"; then
+            BUMP_TYPE="patch"
+            echo "🐛 Bug fix detected → PATCH version bump"
+          # Check for other conventional commit types
+          elif echo "$COMMITS" | grep -qiE "^(chore|docs|style|refactor|perf|test|build|ci)(\(.*\))?:"; then
+            BUMP_TYPE="patch"
+            echo "🔧 Maintenance commit detected → PATCH version bump"
+          else
+            BUMP_TYPE="patch"
+            echo "📝 No conventional commit detected → Default PATCH version bump"
+          fi
+          
+          echo "BUMP_TYPE=$BUMP_TYPE" >> $GITHUB_OUTPUT
+      
+      - name: Auto-increment version
+        id: version
+        shell: bash
+        run: |
+          # Read current version from vsixmanifest
+          MANIFEST_FILE="InterfaceExtractor.Extension/source.extension.vsixmanifest"
+          CURRENT_VERSION=$(grep -oP 'Version="\K[^"]+' "$MANIFEST_FILE" | head -1)
+          BUMP_TYPE="${{ steps.version-bump.outputs.BUMP_TYPE }}"
+          BRANCH_NAME="${{ github.ref_name }}"
+          
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH BUILD <<< "$CURRENT_VERSION"
+          
+          # Determine new version based on bump type (for main branch)
+          if [[ "$BUMP_TYPE" == "major" ]]; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif [[ "$BUMP_TYPE" == "minor" ]]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+          
+          BASE_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          
+          # Determine prerelease type based on branch
+          if [[ "$BRANCH_NAME" == *"testing"* ]]; then
+            # Testing branches: find the next testing prerelease number
+            LAST_TESTING_TAG=$(git tag -l "v${BASE_VERSION}-testing.*" --sort=-version:refname | head -n 1)
+            if [ -z "$LAST_TESTING_TAG" ]; then
+              PRERELEASE_NUM=0
+            else
+              LAST_NUM=$(echo "$LAST_TESTING_TAG" | sed -n 's/.*-testing\.\([0-9]*\).*/\1/p')
+              PRERELEASE_NUM=$((LAST_NUM + 1))
+            fi
+            
+            PRERELEASE_NUM=$(printf "%02d" $PRERELEASE_NUM)
+            NEW_VERSION="${BASE_VERSION}.${PRERELEASE_NUM}"
+            DISPLAY_VERSION="${BASE_VERSION}-testing.${PRERELEASE_NUM}"
+            IS_PRERELEASE="true"
+            TAG_NAME="v${DISPLAY_VERSION}"
+            RELEASE_NAME="v${DISPLAY_VERSION} 🧪 Testing Release"
+            RELEASE_TYPE="testing"
+            echo "🧪 Testing version: $DISPLAY_VERSION"
+          elif [[ "$BRANCH_NAME" == "dev" ]]; then
+            # Dev branch: find the next dev prerelease number
+            LAST_DEV_TAG=$(git tag -l "v${BASE_VERSION}-dev.*" --sort=-version:refname | head -n 1)
+            if [ -z "$LAST_DEV_TAG" ]; then
+              PRERELEASE_NUM=0
+            else
+              LAST_NUM=$(echo "$LAST_DEV_TAG" | sed -n 's/.*-dev\.\([0-9]*\).*/\1/p')
+              PRERELEASE_NUM=$((LAST_NUM + 1))
+            fi
+            
+            PRERELEASE_NUM=$(printf "%02d" $PRERELEASE_NUM)
+            NEW_VERSION="${BASE_VERSION}.${PRERELEASE_NUM}"
+            DISPLAY_VERSION="${BASE_VERSION}-dev.${PRERELEASE_NUM}"
+            IS_PRERELEASE="true"
+            TAG_NAME="v${DISPLAY_VERSION}"
+            RELEASE_NAME="v${DISPLAY_VERSION} 🔧 Dev Release"
+            RELEASE_TYPE="dev"
+            echo "🔧 Dev version: $DISPLAY_VERSION"
+          else
+            # Main branch: production release
+            NEW_VERSION="${BASE_VERSION}.0"
+            DISPLAY_VERSION="${BASE_VERSION}"
+            IS_PRERELEASE="false"
+            TAG_NAME="v${DISPLAY_VERSION}"
+            RELEASE_NAME="v${DISPLAY_VERSION} Release"
+            RELEASE_TYPE="production"
+            echo "📦 Production version: $DISPLAY_VERSION (${BUMP_TYPE} bump)"
+          fi
+          
+          # Update version in vsixmanifest
+          sed -i "s/Version=\"[^\"]*\"/Version=\"${NEW_VERSION}\"/" "$MANIFEST_FILE"
+          
+          echo "VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "DISPLAY_VERSION=$DISPLAY_VERSION" >> $GITHUB_OUTPUT
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "BUMP_TYPE=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "RELEASE_TYPE=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+      
+      - name: Build Extension
+        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:m
+      
+      - name: Locate VSIX file
+        id: locate-vsix
+        shell: bash
+        run: |
+          VSIX_PATH=$(find InterfaceExtractor.Extension/bin/Release -name "*.vsix" | head -1)
+          if [ -z "$VSIX_PATH" ]; then
+            echo "❌ VSIX file not found!"
+            exit 1
+          fi
+          echo "✅ Found VSIX: $VSIX_PATH"
+          
+          # Rename VSIX to include version
+          VSIX_DIR=$(dirname "$VSIX_PATH")
+          NEW_VSIX_NAME="InterfaceExtractor-${{ steps.version.outputs.DISPLAY_VERSION }}.vsix"
+          NEW_VSIX_PATH="$VSIX_DIR/$NEW_VSIX_NAME"
+          mv "$VSIX_PATH" "$NEW_VSIX_PATH"
+          echo "📦 Renamed to: $NEW_VSIX_PATH"
+          
+          echo "VSIX_PATH=$NEW_VSIX_PATH" >> $GITHUB_OUTPUT
+          echo "VSIX_NAME=$NEW_VSIX_NAME" >> $GITHUB_OUTPUT
+      
+      - name: Create and push git tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.TAG_NAME }}" -m "Release ${{ steps.version.outputs.TAG_NAME }}"
+          git push origin "${{ steps.version.outputs.TAG_NAME }}"
+      
+      - name: Generate release notes
+        id: release-notes
+        shell: bash
+        run: |
+          RELEASE_TYPE="${{ steps.version.outputs.RELEASE_TYPE }}"
+          
+          # Find the last tag of the same type
+          if [[ "$RELEASE_TYPE" == "testing" ]]; then
+            LAST_TAG=$(git tag -l "v*-testing.*" --sort=-version:refname | head -n 2 | tail -n 1)
+          elif [[ "$RELEASE_TYPE" == "dev" ]]; then
+            LAST_TAG=$(git tag -l "v*-dev.*" --sort=-version:refname | head -n 2 | tail -n 1)
+          else
+            LAST_TAG=$(git tag -l "v*" --sort=-version:refname | grep -v "-" | head -n 2 | tail -n 1)
+          fi
+          
+          # Get commits since last tag of this type with author information
+          if [ -z "$LAST_TAG" ]; then
+            COMMITS=$(git log --first-parent --pretty=format:"- %s by @%an (%h)" --reverse)
+            TAG_INFO="First $RELEASE_TYPE release"
+          else
+            COMMITS=$(git log --first-parent ${LAST_TAG}..HEAD --pretty=format:"- %s by @%an (%h)" --reverse)
+            TAG_INFO="Since $LAST_TAG"
+          fi
+          
+          if [[ "${{ steps.version.outputs.IS_PRERELEASE }}" == "true" ]]; then
+            RELEASE_BODY="## Pre-release
+            
+          **Version:** v${{ steps.version.outputs.DISPLAY_VERSION }}
+          **Commit:** ${{ github.sha }}
+          
+          **Changes ($TAG_INFO):**
+          $COMMITS
+          
+          ## Installation
+          1. Download the \`.vsix\` file below
+          2. Double-click to install in Visual Studio
+          3. Or use: \`Extensions > Manage Extensions > Install from file\`"
+          else
+            RELEASE_BODY="## ${{ steps.version-bump.outputs.BUMP_TYPE == 'patch' && '🐛 Patch' || steps.version-bump.outputs.BUMP_TYPE == 'minor' && '✨ Minor' || '🚨 Major' }} Version Bump
+            
+          **Version:** v${{ steps.version.outputs.DISPLAY_VERSION }}
+          
+          **Changes ($TAG_INFO):**
+          $COMMITS
+          
+          ## Installation
+          1. Download the \`.vsix\` file below
+          2. Double-click to install in Visual Studio
+          3. Or use: \`Extensions > Manage Extensions > Install from file\`"
+          fi
+          
+          echo "$RELEASE_BODY" > release-notes.txt
+      
+      - name: Create GitHub Release with VSIX
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.TAG_NAME }}
+          name: ${{ steps.version.outputs.RELEASE_NAME }}
+          body_path: release-notes.txt
+          draft: false
+          prerelease: ${{ steps.version.outputs.IS_PRERELEASE }}
+          files: |
+            ${{ steps.locate-vsix.outputs.VSIX_PATH }}
+          token: ${{ secrets.GITHUB_TOKEN }}
