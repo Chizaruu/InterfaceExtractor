@@ -1,0 +1,200 @@
+name: Pull Request Tests
+
+permissions:
+  contents: read           # Needed for checkout and caching
+  checks: write            # Needed for publishing test results as check runs
+  pull-requests: write     # Needed for publishing test results to PR
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**.cs'
+      - '**.csproj'
+      - '**.xaml'
+      - '**.vsct'
+      - '**.vsixmanifest'
+      - '.github/workflows/pr-tests.yml'
+
+# Cancel in-progress runs when new commits are pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+      
+      # Cache NuGet packages to speed up builds
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ${{ github.workspace }}/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      
+      - name: Restore NuGet packages
+        run: |
+          nuget restore InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj
+          nuget restore InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj
+        shell: pwsh
+      
+      # Build with warnings as errors for quality
+      - name: Build Extension
+        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Debug /v:minimal /m /warnaserror
+      
+      - name: Build Tests
+        run: msbuild InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj /p:Configuration=Debug /v:minimal /m /warnaserror
+      
+      - name: Setup VSTest
+        uses: darenm/Setup-VSTest@v1.2
+      
+      - name: Run Tests
+        shell: pwsh
+        run: |
+          # Find the test DLL (might be in net48 subdirectory)
+          $testDll = Get-ChildItem -Path "InterfaceExtractor.Tests\bin\Debug" -Filter "InterfaceExtractor.Tests.dll" -Recurse | Select-Object -First 1
+          
+          if ($null -eq $testDll) {
+            Write-Host "❌ Test DLL not found!"
+            exit 1
+          }
+          
+          Write-Host "✅ Found test DLL at: $($testDll.FullName)"
+          
+          # Run tests
+          vstest.console.exe $testDll.FullName /logger:trx /ResultsDirectory:TestResults
+      
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action/windows@v2
+        if: always()
+        with:
+          files: |
+            TestResults/**/*.trx
+          check_name: Test Results
+          comment_title: Test Results
+          compare_to_earlier_commit: false
+      
+      - name: Upload Test Results as Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: TestResults/
+          retention-days: 7
+      
+      - name: Test Summary
+        if: always()
+        shell: pwsh
+        run: |
+          $trxFiles = Get-ChildItem -Path TestResults -Filter *.trx -Recurse
+          
+          if ($trxFiles.Count -eq 0) {
+            Write-Host "❌ No test results found!"
+            exit 1
+          }
+          
+          foreach ($trxFile in $trxFiles) {
+            [xml]$trx = Get-Content $trxFile.FullName
+            $summary = $trx.TestRun.ResultSummary
+            $counters = $summary.Counters
+            
+            $total = [int]$counters.total
+            $passed = [int]$counters.passed
+            $failed = [int]$counters.failed
+            $skipped = [int]$counters.total - [int]$counters.executed
+            
+            Write-Host ""
+            Write-Host "📊 Test Summary"
+            Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            Write-Host "✅ Passed:  $passed"
+            Write-Host "❌ Failed:  $failed"
+            Write-Host "⏭️  Skipped: $skipped"
+            Write-Host "📝 Total:   $total"
+            Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            if ($failed -gt 0) {
+              Write-Host ""
+              Write-Host "❌ Tests Failed!"
+              exit 1
+            } else {
+              Write-Host ""
+              Write-Host "✅ All Tests Passed!"
+            }
+          }
+
+  code-quality:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+      
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+      
+      # Cache NuGet packages
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ${{ github.workspace }}/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      
+      - name: Restore NuGet packages
+        run: |
+          nuget restore InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj
+          nuget restore InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj
+        shell: pwsh
+      
+      - name: Build Solution (Release)
+        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /v:minimal /m /warnaserror
+      
+      - name: Check for Build Warnings
+        shell: pwsh
+        run: |
+          Write-Host "✅ Build completed successfully with no warnings!"
+
+  status-check:
+    runs-on: ubuntu-latest
+    needs: [test, code-quality]
+    if: always()
+    
+    steps:
+      - name: Check Test Status
+        if: needs.test.result != 'success'
+        run: |
+          echo "❌ Tests failed or were cancelled"
+          exit 1
+      
+      - name: Check Code Quality Status
+        if: needs.code-quality.result != 'success'
+        run: |
+          echo "❌ Code quality checks failed or were cancelled"
+          exit 1
+      
+      - name: All Checks Passed
+        run: |
+          echo "✅ All checks passed successfully!"

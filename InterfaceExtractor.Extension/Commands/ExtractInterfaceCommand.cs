@@ -98,8 +98,8 @@ namespace InterfaceExtractor.Commands
 
         private void Execute(object sender, EventArgs e)
         {
-            // Use JoinableTaskFactory.RunAsync for proper async execution from sync context
-            ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            // Use the package's JoinableTaskFactory for proper async execution
+            this.package.JoinableTaskFactory.RunAsync(async () =>
             {
                 try
                 {
@@ -107,7 +107,7 @@ namespace InterfaceExtractor.Commands
                 }
                 catch (Exception ex)
                 {
-                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    await this.package.JoinableTaskFactory.SwitchToMainThreadAsync();
                     LogMessage($"Critical error: {ex.Message}");
                     LogMessage($"Stack trace: {ex.StackTrace}");
                     ShowMessage($"Error: {ex.Message}\n\nCheck the Output Window for details.");
