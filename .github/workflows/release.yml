@@ -303,7 +303,7 @@ jobs:
               $sha = $parts[2]
               
               # Stop if we've reached the last tag
-              if (![string]::IsNullOrEmpty($lastCommitSha) -and $sha -eq $lastCommitSha.Substring(0, 7)) {
+              if (![string]::IsNullOrEmpty($lastCommitSha) -and $lastCommitSha.Length -ge 7 -and $sha -eq $lastCommitSha.Substring(0, 7)) {
                 break
               }
               
@@ -335,7 +335,7 @@ jobs:
           $installation = "## Installation`n"
           $installation += "1. Download the `.vsix` file below`n"
           $installation += "2. Double-click to install in Visual Studio`n"
-          $installation += "3. Or use: ``Extensions > Manage Extensions > Install from file```n"
+          $installation += "3. Or use: ``Extensions > Manage Extensions > Install from file``n"
           
           # Build release body (using string concatenation to avoid YAML parsing issues)
           $releaseBody = ""
