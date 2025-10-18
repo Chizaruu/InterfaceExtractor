@@ -150,9 +150,12 @@ jobs:
             if ([string]::IsNullOrEmpty($lastTestingTag)) {
               $prereleaseNum = 0
             }
-            else {
-              $lastTestingTag -match 'testing\.(\d+)' | Out-Null
+            elseif ($lastTestingTag -match 'testing\.(\d+)') {
               $prereleaseNum = [int]$matches[1] + 1
+            }
+            else {
+              Write-Host "⚠️ Warning: Could not parse testing tag '$lastTestingTag', starting from 0"
+              $prereleaseNum = 0
             }
             
             $prereleaseNum = $prereleaseNum.ToString("00")
@@ -171,9 +174,12 @@ jobs:
             if ([string]::IsNullOrEmpty($lastDevTag)) {
               $prereleaseNum = 0
             }
-            else {
-              $lastDevTag -match 'dev\.(\d+)' | Out-Null
+            elseif ($lastDevTag -match 'dev\.(\d+)') {
               $prereleaseNum = [int]$matches[1] + 1
+            }
+            else {
+              Write-Host "⚠️ Warning: Could not parse dev tag '$lastDevTag', starting from 0"
+              $prereleaseNum = 0
             }
             
             $prereleaseNum = $prereleaseNum.ToString("00")
@@ -220,6 +226,7 @@ jobs:
           "IS_PRERELEASE=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "RELEASE_TYPE=$releaseType" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Build Extension
         run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:minimal /m
       
