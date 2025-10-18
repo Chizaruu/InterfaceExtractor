@@ -529,7 +529,7 @@ namespace InterfaceExtractor.Services
                         .Select(accessor =>
                         {
                             var keyword = accessor.Keyword.Text;
-                            // Convert 'init' to 'get' for interface (init not valid in interfaces)
+                            // Convert 'init' to 'get' for broader compatibility (init accessors in interfaces require implementing types to use init accessors; not supported in all C# versions)
                             return keyword == "init" ? "get" : keyword;
                         })
                         .Distinct() // Remove duplicates if both get and init exist
