@@ -8,6 +8,7 @@ on:
     branches:
       - main
       - dev
+      - '*testing*'
     paths:
       - '**.cs'
       - '**.csproj'
@@ -225,7 +226,7 @@ jobs:
           "IS_PRERELEASE=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "RELEASE_TYPE=$releaseType" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
+      
       - name: Build Extension
         run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /p:DeployExtension=false /p:ZipPackageCompressionLevel=normal /v:minimal /m
       
@@ -260,56 +261,106 @@ jobs:
       
       - name: Generate release notes
         id: release-notes
-        shell: bash
+        shell: pwsh
         run: |
-          RELEASE_TYPE="${{ steps.version.outputs.RELEASE_TYPE }}"
+          $releaseType = "${{ steps.version.outputs.RELEASE_TYPE }}"
           
           # Find the last tag of the same type
-          if [[ "$RELEASE_TYPE" == "testing" ]]; then
-            LAST_TAG=$(git tag -l "v*-testing.*" --sort=-version:refname | head -n 2 | tail -n 1)
-          elif [[ "$RELEASE_TYPE" == "dev" ]]; then
-            LAST_TAG=$(git tag -l "v*-dev.*" --sort=-version:refname | head -n 2 | tail -n 1)
-          else
-            LAST_TAG=$(git tag -l "v*" --sort=-version:refname | grep -v "-" | head -n 2 | tail -n 1)
-          fi
+          if ($releaseType -eq "testing") {
+            $lastTag = git tag -l "v*-testing.*" --sort=-version:refname | Select-Object -Skip 1 -First 1
+          }
+          elseif ($releaseType -eq "dev") {
+            $lastTag = git tag -l "v*-dev.*" --sort=-version:refname | Select-Object -Skip 1 -First 1
+          }
+          else {
+            $lastTag = git tag -l "v*" --sort=-version:refname | Where-Object { $_ -notmatch "-" } | Select-Object -Skip 1 -First 1
+          }
           
-          # Get commits since last tag of this type with author information
-          if [ -z "$LAST_TAG" ]; then
-            COMMITS=$(git log --first-parent --pretty=format:"- %s by @%an (%h)" --reverse)
-            TAG_INFO="First $RELEASE_TYPE release"
-          else
-            COMMITS=$(git log --first-parent ${LAST_TAG}..HEAD --pretty=format:"- %s by @%an (%h)" --reverse)
-            TAG_INFO="Since $LAST_TAG"
-          fi
+          # Get tag info and commit SHA
+          if ([string]::IsNullOrEmpty($lastTag)) {
+            $tagInfo = "First $releaseType release"
+            $lastCommitSha = ""
+          }
+          else {
+            $tagInfo = "Since $lastTag"
+            $lastCommitSha = git rev-list -n 1 $lastTag
+          }
           
-          if [[ "${{ steps.version.outputs.IS_PRERELEASE }}" == "true" ]]; then
-            RELEASE_BODY="## Pre-release
+          # Get commits with GitHub usernames using GitHub API
+          try {
+            Write-Host "Fetching commits from GitHub API..."
+            $apiResponse = gh api "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=100" --jq '.[] | "\(.commit.message | split("\n")[0])||\(.author.login // "unknown")||\(.sha[0:7])"'
             
-          **Version:** v${{ steps.version.outputs.DISPLAY_VERSION }}
-          **Commit:** ${{ github.sha }}
-          
-          **Changes ($TAG_INFO):**
-          $COMMITS
-          
-          ## Installation
-          1. Download the \`.vsix\` file below
-          2. Double-click to install in Visual Studio
-          3. Or use: \`Extensions > Manage Extensions > Install from file\`"
-          else
-            RELEASE_BODY="## ${{ steps.version-bump.outputs.BUMP_TYPE == 'patch' && '🐛 Patch' || steps.version-bump.outputs.BUMP_TYPE == 'minor' && '✨ Minor' || '🚨 Major' }} Version Bump
+            $commitList = @()
+            foreach ($line in $apiResponse) {
+              $parts = $line -split '\|\|'
+              $message = $parts[0]
+              $author = $parts[1]
+              $sha = $parts[2]
+              
+              # Stop if we've reached the last tag
+              if (![string]::IsNullOrEmpty($lastCommitSha) -and $sha -eq $lastCommitSha.Substring(0, 7)) {
+                break
+              }
+              
+              $commitList += "- $message by @$author ($sha)"
+            }
             
-          **Version:** v${{ steps.version.outputs.DISPLAY_VERSION }}
+            $commits = $commitList -join "`n"
+            Write-Host "✅ Successfully fetched commits with GitHub usernames"
+          }
+          catch {
+            Write-Host "⚠️ Failed to get commits from GitHub API: $_"
+            Write-Host "Falling back to git log..."
+            
+            # Fallback to simple git log
+            if ([string]::IsNullOrEmpty($lastTag)) {
+              $commits = git log --first-parent --pretty=format:"- %s (%h)" --reverse
+            }
+            else {
+              $commits = git log --first-parent "$lastTag..HEAD" --pretty=format:"- %s (%h)" --reverse
+            }
+          }
           
-          **Changes ($TAG_INFO):**
-          $COMMITS
+          # If no commits found, add a placeholder
+          if ([string]::IsNullOrEmpty($commits)) {
+            $commits = "- Initial release"
+          }
           
-          ## Installation
-          1. Download the \`.vsix\` file below
-          2. Double-click to install in Visual Studio
-          3. Or use: \`Extensions > Manage Extensions > Install from file\`"
-          fi
+          # Build release body (using string concatenation to avoid YAML parsing issues)
+          $releaseBody = ""
           
-          echo "$RELEASE_BODY" > release-notes.txt
+          if ("${{ steps.version.outputs.IS_PRERELEASE }}" -eq "true") {
+            $releaseBody += "## Pre-release`n`n"
+            $releaseBody += "**Version:** v${{ steps.version.outputs.DISPLAY_VERSION }}`n"
+            $releaseBody += "**Commit:** ${{ github.sha }}`n`n"
+            $releaseBody += "**Changes ($tagInfo):**`n"
+            $releaseBody += "$commits`n`n"
+            $releaseBody += "## Installation`n"
+            $releaseBody += "1. Download the `.vsix` file below`n"
+            $releaseBody += "2. Double-click to install in Visual Studio`n"
+            $releaseBody += "3. Or use: ``Extensions > Manage Extensions > Install from file```n"
+          }
+          else {
+            $emoji = switch ("${{ steps.version-bump.outputs.BUMP_TYPE }}") {
+              "major" { "🚨 Major" }
+              "minor" { "✨ Minor" }
+              default { "🐛 Patch" }
+            }
+            
+            $releaseBody += "## $emoji Version Bump`n`n"
+            $releaseBody += "**Version:** v${{ steps.version.outputs.DISPLAY_VERSION }}`n`n"
+            $releaseBody += "**Changes ($tagInfo):**`n"
+            $releaseBody += "$commits`n`n"
+            $releaseBody += "## Installation`n"
+            $releaseBody += "1. Download the `.vsix` file below`n"
+            $releaseBody += "2. Double-click to install in Visual Studio`n"
+            $releaseBody += "3. Or use: ``Extensions > Manage Extensions > Install from file```n"
+          }
+          
+          $releaseBody | Out-File -FilePath release-notes.txt -Encoding utf8 -NoNewline
+        env:
+          GH_TOKEN: ${{ github.token }}
       
       - name: Create GitHub Release with VSIX
         uses: softprops/action-gh-release@v2
