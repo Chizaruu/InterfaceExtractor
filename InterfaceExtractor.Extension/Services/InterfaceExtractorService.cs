@@ -105,13 +105,21 @@ namespace InterfaceExtractor.Services
                 sb.AppendLine();
             }
 
-            // Add usings
-            foreach (var usingDirective in classInfo.Usings)
+            // Calculate target namespace
+            var targetNamespace = $"{classInfo.Namespace}{_options.InterfacesNamespaceSuffix}";
+
+            // Filter out usings that match the target namespace (avoid self-referencing)
+            var filteredUsings = classInfo.Usings
+                .Where(u => !u.Contains($"using {targetNamespace};"))
+                .ToList();
+
+            // Add filtered usings
+            foreach (var usingDirective in filteredUsings)
             {
                 sb.AppendLine(usingDirective);
             }
 
-            if (classInfo.Usings.Any())
+            if (filteredUsings.Any())
             {
                 sb.AppendLine();
             }
@@ -430,13 +438,23 @@ namespace InterfaceExtractor.Services
 
             var classNamespaceName = classNamespace?.Name.ToString() ?? "";
 
+            // Determine interface name to use
             string interfaceToAdd;
-            if (classNamespaceName == interfaceNamespace || string.IsNullOrEmpty(interfaceNamespace))
+            bool sameNamespace = classNamespaceName == interfaceNamespace || string.IsNullOrEmpty(interfaceNamespace);
+
+            if (sameNamespace)
             {
+                // Same namespace, use simple name
+                interfaceToAdd = interfaceName;
+            }
+            else if (_options.AddUsingDirective)
+            {
+                // Different namespace but adding using directive, use simple name
                 interfaceToAdd = interfaceName;
             }
             else
             {
+                // Different namespace and not adding using, use fully qualified name
                 interfaceToAdd = $"{interfaceNamespace}.{interfaceName}";
             }
 
@@ -476,7 +494,7 @@ namespace InterfaceExtractor.Services
             var newRoot = root.ReplaceNode(classDeclaration, newClassDeclaration);
 
             if (_options.AddUsingDirective &&
-                classNamespaceName != interfaceNamespace &&
+                !sameNamespace &&
                 !string.IsNullOrEmpty(interfaceNamespace))
             {
                 var usingDirective = SyntaxFactory.UsingDirective(
@@ -569,6 +587,6 @@ namespace InterfaceExtractor.Services
         Property,
         Event,
         Indexer,
-        Operator  // NEW in v1.1
+        Operator
     }
 }

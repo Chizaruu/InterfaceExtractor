@@ -106,7 +106,7 @@ namespace Test
             // Act
             var interfaceCode = service.GenerateInterface("ITestClass", classInfos[0], classInfos[0].Members);
 
-            // Assert - The namespace should use the custom suffix
+            // Assert - Folder name doesn't affect namespace, only the namespace suffix does
             interfaceCode.Should().Contain("namespace Test.Interfaces"); // Still uses .Interfaces suffix
         }
 
@@ -162,6 +162,101 @@ namespace Test
 
             // Assert
             result.Should().Be(sourceCode); // Unchanged
+        }
+
+        [Fact]
+        public void Service_WithAddUsingDirectiveDisabled_UsesFullyQualifiedName()
+        {
+            // Arrange
+            var options = new ExtractorOptions
+            {
+                AutoUpdateClass = true,
+                AddUsingDirective = false
+            };
+            var service = new InterfaceExtractorService(options);
+
+            var sourceCode = @"
+namespace Test
+{
+    public class TestClass
+    {
+        public string Name { get; set; }
+    }
+}";
+
+            // Act
+            var result = service.AppendInterfaceToClass(sourceCode, "TestClass", "ITestClass", "Test.Interfaces");
+
+            // Assert - Should use fully qualified name since no using directive
+            result.Should().Contain("public class TestClass : Test.Interfaces.ITestClass");
+            result.Should().NotContain("using Test.Interfaces;");
+        }
+
+        [Fact]
+        public void Service_WithAddUsingDirectiveEnabled_UsesSimpleNameAndAddsUsing()
+        {
+            // Arrange
+            var options = new ExtractorOptions
+            {
+                AutoUpdateClass = true,
+                AddUsingDirective = true
+            };
+            var service = new InterfaceExtractorService(options);
+
+            var sourceCode = @"
+namespace Test
+{
+    public class TestClass
+    {
+        public string Name { get; set; }
+    }
+}";
+
+            // Act
+            var result = service.AppendInterfaceToClass(sourceCode, "TestClass", "ITestClass", "Test.Interfaces");
+
+            // Assert - Should use simple name and add using directive
+            result.Should().Contain("public class TestClass : ITestClass");
+            result.Should().NotContain("Test.Interfaces.ITestClass");
+            result.Should().Contain("using Test.Interfaces;");
+        }
+
+        [Fact]
+        public void Service_FiltersOutSelfReferencingUsings()
+        {
+            // Arrange
+            var service = new InterfaceExtractorService();
+
+            var classInfo = new ExtractedClassInfo
+            {
+                ClassName = "TestClass",
+                Namespace = "MyApp.Data",
+                Usings =
+                [
+                    "using System;",
+                    "using MyApp.Models;",
+                    "using MyApp.Data.Interfaces;" // This should be filtered out!
+                ],
+                Members =
+                [
+                    new MemberInfo
+                    {
+                        Type = MemberType.Property,
+                        Signature = "string Name { get; set; }",
+                        Name = "Name"
+                    }
+                ]
+            };
+
+            // Act
+            var interfaceCode = service.GenerateInterface("ITestClass", classInfo, classInfo.Members);
+
+            // Assert - Should NOT include the self-referencing using
+            interfaceCode.Should().Contain("using System;");
+            interfaceCode.Should().Contain("using MyApp.Models;");
+            interfaceCode.Should().NotContain("using MyApp.Data.Interfaces;",
+                "interface should not include using statement for its own namespace");
+            interfaceCode.Should().Contain("namespace MyApp.Data.Interfaces");
         }
 
         #endregion Options Tests
@@ -416,7 +511,7 @@ namespace Test
             var interfaceCode = service.GenerateInterface("ITestClass", classInfos[0], classInfos[0].Members);
 
             // Assert - with 0 separator lines, properties should be consecutive (no blank line between)
-            var lines = interfaceCode.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            var lines = interfaceCode.Split(["\r\n", "\n"], StringSplitOptions.None);
             var aIndex = Array.FindIndex(lines, l => l.Contains("string A"));
             var bIndex = Array.FindIndex(lines, l => l.Contains("string B"));
 
@@ -452,8 +547,8 @@ namespace Test
             var codeWithThree = serviceThree.GenerateInterface("ITestClass", classInfos[0], classInfos[0].Members);
 
             // Assert - Count blank lines between the properties
-            var linesOne = codeWithOne.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-            var linesThree = codeWithThree.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            var linesOne = codeWithOne.Split(["\r\n", "\n"], StringSplitOptions.None);
+            var linesThree = codeWithThree.Split(["\r\n", "\n"], StringSplitOptions.None);
 
             var aIndexOne = Array.FindIndex(linesOne, l => l.Contains("string A"));
             var bIndexOne = Array.FindIndex(linesOne, l => l.Contains("string B"));
