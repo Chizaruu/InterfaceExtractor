@@ -414,7 +414,7 @@ InterfaceExtractor/
 
 - Only processes public and optionally internal members (not private/protected)
 - Nested classes: only processes top-level classes/records
-- Operator overloads in interfaces: Generated signatures require manual addition of `static abstract` keywords for C# 11+ compatibility
+- Operator overloads in interfaces: Only supported in C# 11+. Generated operator signatures in interfaces require manual addition of `static abstract` keywords, and the containing interface must support static abstract members.
 
 ## Version History
 
