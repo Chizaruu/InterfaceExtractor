@@ -6,6 +6,18 @@ on:
       - main
       - dev
     types: [opened, synchronize, reopened]
+    paths:
+      - '**.cs'
+      - '**.csproj'
+      - '**.xaml'
+      - '**.vsct'
+      - '**.vsixmanifest'
+      - '.github/workflows/pr-tests.yml'
+
+# Cancel in-progress runs when new commits are pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -21,17 +33,28 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
       
-      - name: Restore NuGet packages for Extension
-        run: nuget restore InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj
+      # Cache NuGet packages to speed up builds
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ${{ github.workspace }}/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
       
-      - name: Restore NuGet packages for Tests
-        run: nuget restore InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj
+      - name: Restore NuGet packages
+        run: |
+          nuget restore InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj
+          nuget restore InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj
+        shell: pwsh
       
       - name: Build Extension
-        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Debug /v:m
+        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Debug /v:minimal /m
       
       - name: Build Tests
-        run: msbuild InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj /p:Configuration=Debug /v:m
+        run: msbuild InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj /p:Configuration=Debug /v:minimal /m
       
       - name: Setup VSTest
         uses: darenm/Setup-VSTest@v1.2
@@ -55,7 +78,7 @@ jobs:
         with:
           name: test-results
           path: TestResults/
-          retention-days: 30
+          retention-days: 7 
       
       - name: Test Summary
         if: always()
@@ -110,13 +133,25 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
       
+      # Cache NuGet packages
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ${{ github.workspace }}/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      
       - name: Restore NuGet packages
         run: |
           nuget restore InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj
           nuget restore InterfaceExtractor.Tests/InterfaceExtractor.Tests.csproj
+        shell: pwsh
       
       - name: Build Solution (Release)
-        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /v:m /warnaserror
+        run: msbuild InterfaceExtractor.Extension/InterfaceExtractor.Extension.csproj /p:Configuration=Release /v:minimal /m /warnaserror
       
       - name: Check for Build Warnings
         shell: pwsh
