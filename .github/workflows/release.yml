@@ -94,6 +94,10 @@ jobs:
             BUMP_TYPE="patch"
             CONVENTIONAL_COMMIT_FOUND="true"
             echo "🔧 Maintenance commit detected → PATCH version bump"
+          elif echo "$COMMITS" | grep -qiE "^*(patch)(\(.*\))?:"; then
+            BUMP_TYPE="patch"
+            CONVENTIONAL_COMMIT_FOUND="true"
+            echo "🔧 Patch commit detected → PATCH version bump"
           else
             BUMP_TYPE="none"
             CONVENTIONAL_COMMIT_FOUND="false"
